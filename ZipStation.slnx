@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="ZipStation.Api/ZipStation.Api.csproj" />
+  <Project Path="ZipStation.Business/ZipStation.Business.csproj" />
+  <Project Path="ZipStation.Mapping/ZipStation.Mapping.csproj" />
+  <Project Path="ZipStation.Models/ZipStation.Models.csproj" />
+</Solution>

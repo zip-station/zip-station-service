@@ -1,0 +1,6 @@
+@ZipStation.Api_HostAddress = http://localhost:5272
+
+GET {{ZipStation.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
