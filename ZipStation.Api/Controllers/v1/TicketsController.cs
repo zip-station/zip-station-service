@@ -336,8 +336,15 @@ public class TicketsController : BaseController
                         var project = await _projectRepository.GetAsync(ticket.ProjectId);
                         if (project != null)
                         {
+                            // Find the last customer message to quote in the reply
+                            var ticketMessages = await _ticketMessageRepository.GetByTicketIdAsync(id);
+                            var lastCustomerMsg = ticketMessages
+                                .Where(m => m.Source == MessageSource.Customer && m.Id != created.Id)
+                                .OrderByDescending(m => m.CreatedOnDateTime)
+                                .FirstOrDefault();
+
                             var (success, error) = await _emailService.SendReplyAsync(
-                                project, ticket, created, ticket.CustomerEmail!, ticket.CustomerName);
+                                project, ticket, created, ticket.CustomerEmail!, ticket.CustomerName, lastCustomerMsg);
 
                             created.SendStatus = success ? MessageSendStatus.Sent : MessageSendStatus.Failed;
                             created.SendError = error;

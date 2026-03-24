@@ -14,7 +14,8 @@ public interface IEmailService
         Ticket ticket,
         TicketMessage message,
         string toEmail,
-        string? toName);
+        string? toName,
+        TicketMessage? previousMessage = null);
 
     Task SendAutoReplyAsync(Project project, Ticket ticket, string toEmail, string? toName);
 }
@@ -33,7 +34,8 @@ public class EmailService : IEmailService
         Ticket ticket,
         TicketMessage message,
         string toEmail,
-        string? toName)
+        string? toName,
+        TicketMessage? previousMessage = null)
     {
         var smtp = project.Settings?.Smtp;
         if (smtp == null || string.IsNullOrEmpty(smtp.Host))
@@ -71,6 +73,31 @@ public class EmailService : IEmailService
             {
                 bodyHtml = $"{bodyHtml}<br/><br/>--<br/>{signature.SignatureHtml}";
                 bodyText = $"{bodyText}\n\n--\n{signature.SignatureHtml.Replace("<br/>", "\n").Replace("<br>", "\n")}";
+            }
+
+            // Append quoted previous message for context
+            if (previousMessage != null)
+            {
+                var quotedAuthor = previousMessage.AuthorName ?? previousMessage.AuthorEmail ?? toEmail;
+                var quotedDate = DateTimeOffset.FromUnixTimeMilliseconds(previousMessage.CreatedOnDateTime)
+                    .ToString("ddd, MMM d, yyyy 'at' h:mm tt");
+                var quoteHeader = $"On {quotedDate}, {quotedAuthor} wrote:";
+
+                if (!string.IsNullOrEmpty(previousMessage.BodyHtml))
+                {
+                    bodyHtml += $"<br/><br/><div class=\"gmail_quote\">{quoteHeader}<br/><blockquote style=\"margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex\">{previousMessage.BodyHtml}</blockquote></div>";
+                }
+                else if (!string.IsNullOrEmpty(previousMessage.Body))
+                {
+                    var quotedLines = previousMessage.Body.Split('\n').Select(l => $"&gt; {System.Net.WebUtility.HtmlEncode(l)}");
+                    bodyHtml += $"<br/><br/><div class=\"gmail_quote\">{quoteHeader}<br/><blockquote style=\"margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex\"><pre>{string.Join("\n", quotedLines)}</pre></blockquote></div>";
+                }
+
+                if (!string.IsNullOrEmpty(previousMessage.Body))
+                {
+                    var quotedText = string.Join("\n", previousMessage.Body.Split('\n').Select(l => $"> {l}"));
+                    bodyText += $"\n\n{quoteHeader}\n{quotedText}";
+                }
             }
 
             var bodyBuilder = new BodyBuilder();
