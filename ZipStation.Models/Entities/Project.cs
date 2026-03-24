@@ -123,4 +123,8 @@ public class TicketIdSettings
     public TicketIdFormat Format { get; set; } = TicketIdFormat.Numeric;
 
     public string SubjectTemplate { get; set; } = "{ProjectName} - Ticket {TicketId}";
+
+    public long StartingNumber { get; set; }
+
+    public bool UseRandomNumbers { get; set; }
 }

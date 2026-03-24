@@ -173,8 +173,8 @@ public class IntakeController : BaseController
 
             // Generate ticket number and subject from template
             var project = await _projectRepository.GetAsync(intake.ProjectId);
-            var ticketNumber = await _ticketIdCounterRepository.GetNextTicketNumberAsync(intake.ProjectId);
             var ticketIdSettings = project?.Settings?.TicketId ?? new TicketIdSettings();
+            var ticketNumber = await GenerateTicketNumberAsync(intake.ProjectId, ticketIdSettings);
             var minLen = Math.Max(ticketIdSettings.MinLength, 3);
             var displayId = ticketNumber.ToString().PadLeft(minLen, '0');
             if (!string.IsNullOrEmpty(ticketIdSettings.Prefix))
@@ -301,8 +301,8 @@ public class IntakeController : BaseController
                                 customer = new Customer { CompanyId = companyId, ProjectId = intake.ProjectId, Email = intake.FromEmail, Name = intake.FromName };
                                 await _customerRepository.CreateAsync(customer);
                             }
-                            var ticketNumber = await _ticketIdCounterRepository.GetNextTicketNumberAsync(intake.ProjectId);
                             var ticketIdSettings = project.Settings?.TicketId ?? new TicketIdSettings();
+                            var ticketNumber = await GenerateTicketNumberAsync(intake.ProjectId, ticketIdSettings);
                             var minLen = Math.Max(ticketIdSettings.MinLength, 3);
                             var displayId = ticketNumber.ToString().PadLeft(minLen, '0');
                             if (!string.IsNullOrEmpty(ticketIdSettings.Prefix)) displayId = $"{ticketIdSettings.Prefix}-{displayId}";
@@ -394,6 +394,29 @@ public class IntakeController : BaseController
             _logger.LogError(ex, "Error denying intake {IntakeId}", id);
             return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
         }
+    }
+
+    private async Task<long> GenerateTicketNumberAsync(string projectId, TicketIdSettings settings)
+    {
+        if (!settings.UseRandomNumbers)
+        {
+            var next = await _ticketIdCounterRepository.GetNextTicketNumberAsync(projectId);
+            return Math.Max(next, settings.StartingNumber > 0 ? settings.StartingNumber : next);
+        }
+
+        var min = settings.StartingNumber > 0 ? settings.StartingNumber : (long)Math.Pow(10, Math.Max(settings.MinLength, 3) - 1);
+        var max = (long)Math.Pow(10, settings.MaxLength) - 1;
+        if (min > max) min = max / 2;
+
+        var random = new Random();
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            var candidate = (long)(random.NextDouble() * (max - min + 1)) + min;
+            var exists = await _ticketRepository.ExistsByTicketNumberAndProjectAsync(projectId, candidate);
+            if (!exists) return candidate;
+        }
+
+        return await _ticketIdCounterRepository.GetNextTicketNumberAsync(projectId);
     }
 }
 

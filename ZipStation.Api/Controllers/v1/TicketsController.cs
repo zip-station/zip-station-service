@@ -205,10 +205,10 @@ public class TicketsController : BaseController
             if (project == null)
                 return BadRequest(new BadRequestResponse { Message = "Project not found" });
 
-            var ticketNumber = await _ticketIdCounterRepository.GetNextTicketNumberAsync(request.ProjectId);
+            var ticketIdSettings = project.Settings?.TicketId ?? new TicketIdSettings();
+            var ticketNumber = await GenerateTicketNumberAsync(request.ProjectId, ticketIdSettings);
 
             // Generate display ID based on format settings
-            var ticketIdSettings = project.Settings?.TicketId ?? new TicketIdSettings();
             var displayId = GenerateDisplayId(ticketNumber, ticketIdSettings);
 
             // Auto-generate subject from template if not provided
@@ -943,6 +943,31 @@ public class TicketsController : BaseController
         }
 
         return null;
+    }
+
+    private async Task<long> GenerateTicketNumberAsync(string projectId, TicketIdSettings settings)
+    {
+        if (!settings.UseRandomNumbers)
+        {
+            var next = await _ticketIdCounterRepository.GetNextTicketNumberAsync(projectId);
+            return Math.Max(next, settings.StartingNumber > 0 ? settings.StartingNumber : next);
+        }
+
+        // Random number generation within the configured range
+        var min = settings.StartingNumber > 0 ? settings.StartingNumber : (long)Math.Pow(10, Math.Max(settings.MinLength, 3) - 1);
+        var max = (long)Math.Pow(10, settings.MaxLength) - 1;
+        if (min > max) min = max / 2;
+
+        var random = new Random();
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            var candidate = (long)(random.NextDouble() * (max - min + 1)) + min;
+            var exists = await _ticketRepository.ExistsByTicketNumberAndProjectAsync(projectId, candidate);
+            if (!exists) return candidate;
+        }
+
+        // Fallback: use sequential if random fails after 100 attempts
+        return await _ticketIdCounterRepository.GetNextTicketNumberAsync(projectId);
     }
 
     private static string GenerateDisplayId(long ticketNumber, TicketIdSettings settings)

@@ -11,6 +11,7 @@ public interface ITicketRepository : IBaseRepository<Ticket>
     Task<long> CountByStatusAsync(string companyId, TicketStatus status);
     Task<Ticket?> GetByCustomerEmailAndProjectAsync(string email, string projectId);
     Task<Ticket?> GetByTicketNumberAsync(string companyId, long ticketNumber);
+    Task<bool> ExistsByTicketNumberAndProjectAsync(string projectId, long ticketNumber);
 }
 
 public class TicketRepository : BaseRepository<Ticket>, ITicketRepository
@@ -63,5 +64,12 @@ public class TicketRepository : BaseRepository<Ticket>, ITicketRepository
         return await _Collection.Find(filter)
             .SortByDescending(t => t.CreatedOnDateTime)
             .FirstOrDefaultAsync();
+    }
+
+    public async Task<bool> ExistsByTicketNumberAndProjectAsync(string projectId, long ticketNumber)
+    {
+        var filter = Builders<Ticket>.Filter.Eq(t => t.ProjectId, projectId)
+                   & Builders<Ticket>.Filter.Eq(t => t.TicketNumber, ticketNumber);
+        return await _Collection.CountDocumentsAsync(filter) > 0;
     }
 }

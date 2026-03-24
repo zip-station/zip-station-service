@@ -89,4 +89,6 @@ public class TicketIdSettingsResponse
     public int MaxLength { get; set; } = 6;
     public TicketIdFormat Format { get; set; } = TicketIdFormat.Numeric;
     public string SubjectTemplate { get; set; } = "{ProjectName} - Ticket {TicketId}";
+    public long StartingNumber { get; set; }
+    public bool UseRandomNumbers { get; set; }
 }

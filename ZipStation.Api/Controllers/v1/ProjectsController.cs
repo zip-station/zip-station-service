@@ -26,6 +26,7 @@ public class ProjectsController : BaseController
     private readonly IProjectGateway _projectGateway;
     private readonly IAppUser _appUser;
     private readonly IAuditService _auditService;
+    private readonly ITicketIdCounterRepository _ticketIdCounterRepository;
 
     public ProjectsController(
         ILogger<ProjectsController> logger,
@@ -34,7 +35,8 @@ public class ProjectsController : BaseController
         IMapper mapper,
         IProjectGateway projectGateway,
         IAppUser appUser,
-        IAuditService auditService)
+        IAuditService auditService,
+        ITicketIdCounterRepository ticketIdCounterRepository)
     {
         _logger = logger;
         _projectRepository = projectRepository;
@@ -43,6 +45,7 @@ public class ProjectsController : BaseController
         _projectGateway = projectGateway;
         _appUser = appUser;
         _auditService = auditService;
+        _ticketIdCounterRepository = ticketIdCounterRepository;
     }
 
     [HttpPost]
@@ -288,6 +291,18 @@ public class ProjectsController : BaseController
                     project.Settings.TicketId.Format = request.TicketId.Format.Value;
                 if (request.TicketId.SubjectTemplate != null)
                     project.Settings.TicketId.SubjectTemplate = request.TicketId.SubjectTemplate;
+                if (request.TicketId.StartingNumber.HasValue)
+                {
+                    if (request.TicketId.StartingNumber.Value < 0)
+                        return BadRequest(new BadRequestResponse { Message = "Starting number cannot be negative" });
+                    project.Settings.TicketId.StartingNumber = request.TicketId.StartingNumber.Value;
+                    // Ensure counter is at least the starting number
+                    var currentValue = await _ticketIdCounterRepository.GetCurrentValueAsync(project.Id);
+                    if (currentValue < request.TicketId.StartingNumber.Value)
+                        await _ticketIdCounterRepository.SetValueAsync(project.Id, request.TicketId.StartingNumber.Value);
+                }
+                if (request.TicketId.UseRandomNumbers.HasValue)
+                    project.Settings.TicketId.UseRandomNumbers = request.TicketId.UseRandomNumbers.Value;
             }
 
             if (request.ContactForm != null)
@@ -534,6 +549,8 @@ public class UpdateTicketIdSettingsRequest
     public int? MaxLength { get; set; }
     public TicketIdFormat? Format { get; set; }
     public string? SubjectTemplate { get; set; }
+    public long? StartingNumber { get; set; }
+    public bool? UseRandomNumbers { get; set; }
 }
 
 public class UpdateContactFormSettingsRequest

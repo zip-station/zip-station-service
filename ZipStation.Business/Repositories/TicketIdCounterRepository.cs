@@ -7,6 +7,7 @@ public interface ITicketIdCounterRepository
 {
     Task<long> GetNextTicketNumberAsync(string projectId);
     Task<long> GetCurrentValueAsync(string projectId);
+    Task SetValueAsync(string projectId, long value);
 }
 
 public class TicketIdCounterRepository : ITicketIdCounterRepository
@@ -37,5 +38,13 @@ public class TicketIdCounterRepository : ITicketIdCounterRepository
         var filter = Builders<TicketIdCounter>.Filter.Eq(c => c.ProjectId, projectId);
         var counter = await _collection.Find(filter).FirstOrDefaultAsync();
         return counter?.CurrentValue ?? 0;
+    }
+
+    public async Task SetValueAsync(string projectId, long value)
+    {
+        var filter = Builders<TicketIdCounter>.Filter.Eq(c => c.ProjectId, projectId);
+        var update = Builders<TicketIdCounter>.Update.Set(c => c.CurrentValue, value);
+        var options = new UpdateOptions { IsUpsert = true };
+        await _collection.UpdateOneAsync(filter, update, options);
     }
 }
