@@ -357,9 +357,11 @@ public class TicketsController : BaseController
             }
 
             // If not an internal note, update ticket status to Pending (awaiting customer reply)
-            if (!commandModel.IsInternalNote && ticket.Status == TicketStatus.Open)
+            if (!commandModel.IsInternalNote)
             {
-                ticket.Status = TicketStatus.Pending;
+                ticket.LastMessageSource = MessageSource.Agent;
+                if (ticket.Status == TicketStatus.Open)
+                    ticket.Status = TicketStatus.Pending;
                 await _ticketRepository.UpdateAsync(ticket);
             }
 

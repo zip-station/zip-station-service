@@ -1,3 +1,4 @@
+using ZipStation.Models.Entities;
 using ZipStation.Models.Enums;
 
 namespace ZipStation.Models.Responses;
@@ -18,6 +19,7 @@ public class TicketResponse
     public TicketCreationSource CreationSource { get; set; }
     public List<string> LinkedTicketIds { get; set; } = new();
     public string? MergedIntoTicketId { get; set; }
+    public MessageSource? LastMessageSource { get; set; }
     public long CreatedOnDateTime { get; set; }
     public long UpdatedOnDateTime { get; set; }
 }

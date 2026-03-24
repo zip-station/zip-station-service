@@ -39,4 +39,6 @@ public class Ticket : BaseEntity
 
     [BsonIgnoreIfNull]
     public string? MergedIntoTicketId { get; set; }
+
+    public MessageSource? LastMessageSource { get; set; }
 }
