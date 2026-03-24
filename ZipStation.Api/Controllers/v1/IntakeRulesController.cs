@@ -6,6 +6,7 @@ using ZipStation.Business.Gateways;
 using ZipStation.Business.Repositories;
 using ZipStation.Models.CommandModels;
 using ZipStation.Models.Entities;
+using ZipStation.Models.Enums;
 using ZipStation.Models.Responses;
 
 namespace ZipStation.Api.Controllers.v1;
@@ -18,17 +19,20 @@ public class IntakeRulesController : BaseController
 {
     private readonly ILogger<IntakeRulesController> _logger;
     private readonly IIntakeRuleRepository _intakeRuleRepository;
+    private readonly IIntakeEmailRepository _intakeEmailRepository;
     private readonly IMapper _mapper;
     private readonly IIntakeRuleGateway _intakeRuleGateway;
 
     public IntakeRulesController(
         ILogger<IntakeRulesController> logger,
         IIntakeRuleRepository intakeRuleRepository,
+        IIntakeEmailRepository intakeEmailRepository,
         IMapper mapper,
         IIntakeRuleGateway intakeRuleGateway)
     {
         _logger = logger;
         _intakeRuleRepository = intakeRuleRepository;
+        _intakeEmailRepository = intakeEmailRepository;
         _mapper = mapper;
         _intakeRuleGateway = intakeRuleGateway;
     }
@@ -151,5 +155,71 @@ public class IntakeRulesController : BaseController
             _logger.LogError(ex, "Error deleting intake rule {RuleId}", id);
             return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
         }
+    }
+
+    [HttpPost("{id}/run")]
+    [MapToApiVersion("1.0")]
+    [ProducesResponseType(typeof(RunRuleResult), StatusCodes.Status200OK)]
+    public async Task<IActionResult> RunRule(string companyId, string projectId, string id)
+    {
+        try
+        {
+            var rule = await _intakeRuleRepository.GetAsync(id);
+            if (rule == null || rule.CompanyId != companyId || rule.ProjectId != projectId) return NotFound();
+
+            var gatewayResponse = await _intakeRuleGateway.CanUpdateRuleAsync(companyId);
+            if (gatewayResponse.ResponseStatus != GatewayResponseCodes.Ok)
+                return ProcessGatewayResponse(gatewayResponse);
+
+            if (rule.Conditions.Count == 0)
+                return BadRequest(new BadRequestResponse { Message = "Rule has no conditions" });
+
+            var pendingIntakes = await _intakeEmailRepository.GetPendingByProjectIdAsync(projectId);
+            var matched = 0;
+
+            foreach (var intake in pendingIntakes)
+            {
+                var allMatch = rule.Conditions.All(condition => condition.Type switch
+                {
+                    IntakeConditionType.FromEmail => intake.FromEmail.Equals(condition.Value, StringComparison.OrdinalIgnoreCase),
+                    IntakeConditionType.FromDomain => intake.FromEmail.EndsWith($"@{condition.Value.TrimStart('@')}", StringComparison.OrdinalIgnoreCase),
+                    IntakeConditionType.SubjectContains => intake.Subject.Contains(condition.Value, StringComparison.OrdinalIgnoreCase),
+                    IntakeConditionType.BodyContains => intake.BodyText.Contains(condition.Value, StringComparison.OrdinalIgnoreCase),
+                    _ => false
+                });
+
+                if (!allMatch) continue;
+
+                if (rule.Action is IntakeActionType.AutoDeny or IntakeActionType.AutoDenyPermanent)
+                {
+                    intake.Status = IntakeStatus.Denied;
+                    intake.DeniedPermanently = rule.Action == IntakeActionType.AutoDenyPermanent;
+                    intake.ProcessedOn = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    await _intakeEmailRepository.UpdateAsync(intake);
+                }
+                // Note: AutoApprove would need ticket creation logic — skip for now
+                matched++;
+            }
+
+            _logger.LogInformation("Rule {RuleId} run against {Total} pending intakes, {Matched} matched", id, pendingIntakes.Count, matched);
+            return Ok(new RunRuleResult { Matched = matched, Total = pendingIntakes.Count });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error running intake rule {RuleId}", id);
+            return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
+        }
+    }
+
+    private static bool MatchesRule(IntakeEmail intake, IntakeRule rule)
+    {
+        return rule.Conditions.All(condition => condition.Type switch
+        {
+            IntakeConditionType.FromEmail => intake.FromEmail.Equals(condition.Value, StringComparison.OrdinalIgnoreCase),
+            IntakeConditionType.FromDomain => intake.FromEmail.EndsWith($"@{condition.Value.TrimStart('@')}", StringComparison.OrdinalIgnoreCase),
+            IntakeConditionType.SubjectContains => intake.Subject.Contains(condition.Value, StringComparison.OrdinalIgnoreCase),
+            IntakeConditionType.BodyContains => intake.BodyText.Contains(condition.Value, StringComparison.OrdinalIgnoreCase),
+            _ => false
+        });
     }
 }
