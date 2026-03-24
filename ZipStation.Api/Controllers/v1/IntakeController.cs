@@ -34,6 +34,7 @@ public class IntakeController : BaseController
     private readonly IAuditService _auditService;
     private readonly IEmailService _emailService;
     private readonly IAlertService _alertService;
+    private readonly IIntakeRuleRepository _intakeRuleRepository;
 
     public IntakeController(
         ILogger<IntakeController> logger,
@@ -49,7 +50,8 @@ public class IntakeController : BaseController
         IIntakeGateway intakeGateway,
         IAuditService auditService,
         IEmailService emailService,
-        IAlertService alertService)
+        IAlertService alertService,
+        IIntakeRuleRepository intakeRuleRepository)
     {
         _logger = logger;
         _intakeEmailRepository = intakeEmailRepository;
@@ -65,6 +67,7 @@ public class IntakeController : BaseController
         _auditService = auditService;
         _emailService = emailService;
         _alertService = alertService;
+        _intakeRuleRepository = intakeRuleRepository;
     }
 
     [HttpGet]
@@ -384,6 +387,32 @@ public class IntakeController : BaseController
             intake.DeniedPermanently = permanent;
             intake.ProcessedOn = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             await _intakeEmailRepository.UpdateAsync(intake);
+
+            // Auto-create intake rule to block future emails from this sender
+            if (permanent && !string.IsNullOrEmpty(intake.FromEmail))
+            {
+                var rule = new IntakeRule
+                {
+                    CompanyId = companyId,
+                    ProjectId = intake.ProjectId,
+                    Name = $"Auto-deny: {intake.FromEmail}",
+                    Conditions = new List<IntakeRuleCondition>
+                    {
+                        new() { Type = IntakeConditionType.FromEmail, Value = intake.FromEmail }
+                    },
+                    Action = IntakeActionType.AutoDeny,
+                    Priority = 0,
+                    IsEnabled = true
+                };
+                await _intakeRuleRepository.CreateAsync(rule);
+                _logger.LogInformation("Auto-created intake rule to deny emails from {Email}", intake.FromEmail);
+
+                // Also deny all other pending intakes from this sender
+                var bulkDenied = await _intakeEmailRepository.DenyPendingByEmailAsync(
+                    intake.ProjectId, intake.FromEmail, currentUser?.Id);
+                if (bulkDenied > 0)
+                    _logger.LogInformation("Auto-denied {Count} other pending intakes from {Email}", bulkDenied, intake.FromEmail);
+            }
 
             _logger.LogInformation("Intake {IntakeId} denied (permanent: {Permanent})", id, permanent);
             await _auditService.LogAsync(companyId, intake.ProjectId, permanent ? "DeniedPermanently" : "Denied", "IntakeEmail", id, _appUser);
