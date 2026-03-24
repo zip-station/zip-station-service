@@ -187,7 +187,7 @@ public class IntakeController : BaseController
                 .Replace("{TicketId}", displayId)
                 .Replace("{TicketNumber}", ticketNumber.ToString());
 
-            // Create ticket
+            // Create ticket — CreatedOnDateTime = now (approval time)
             var ticket = new Ticket
             {
                 CompanyId = companyId,
@@ -203,7 +203,7 @@ public class IntakeController : BaseController
             };
             var createdTicket = await _ticketRepository.CreateAsync(ticket);
 
-            // Create first message from customer
+            // Create first message from customer — preserve original email timestamp
             var message = new TicketMessage
             {
                 TicketId = createdTicket.Id,
@@ -214,7 +214,8 @@ public class IntakeController : BaseController
                 IsInternalNote = false,
                 AuthorName = intake.FromName,
                 AuthorEmail = intake.FromEmail,
-                Source = MessageSource.Customer
+                Source = MessageSource.Customer,
+                CreatedOnDateTime = intake.ReceivedOn > 0 ? intake.ReceivedOn : 0
             };
             await _ticketMessageRepository.CreateAsync(message);
 
@@ -323,7 +324,8 @@ public class IntakeController : BaseController
                             {
                                 TicketId = ticket.Id, CompanyId = companyId, ProjectId = intake.ProjectId,
                                 Body = intake.BodyText, BodyHtml = intake.BodyHtml, IsInternalNote = false,
-                                AuthorName = intake.FromName, AuthorEmail = intake.FromEmail, Source = MessageSource.Customer
+                                AuthorName = intake.FromName, AuthorEmail = intake.FromEmail, Source = MessageSource.Customer,
+                                CreatedOnDateTime = intake.ReceivedOn > 0 ? intake.ReceivedOn : 0
                             };
                             await _ticketMessageRepository.CreateAsync(msg);
                             intake.Status = IntakeStatus.Approved;

@@ -49,7 +49,8 @@ public class BaseRepository<T> : IBaseRepository<T> where T : BaseEntity
             entity.Id = ObjectId.GenerateNewId().ToString();
 
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        entity.CreatedOnDateTime = now;
+        if (entity.CreatedOnDateTime == 0)
+            entity.CreatedOnDateTime = now;
         entity.UpdatedOnDateTime = now;
         entity.IsVoid = false;
         await _Collection.InsertOneAsync(entity);
