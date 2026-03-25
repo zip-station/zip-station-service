@@ -37,5 +37,6 @@ public class CompanySettings
 {
     public string DefaultTimezone { get; set; } = "America/New_York";
     public string DefaultLanguage { get; set; } = "en";
+    public string? BaseUrl { get; set; }
     public SmtpSettings? Smtp { get; set; }
 }

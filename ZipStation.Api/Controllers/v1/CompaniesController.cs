@@ -215,6 +215,8 @@ public class CompaniesController : BaseController
                 company.Settings.DefaultTimezone = request.DefaultTimezone;
             if (request.DefaultLanguage != null)
                 company.Settings.DefaultLanguage = request.DefaultLanguage;
+            if (request.BaseUrl != null)
+                company.Settings.BaseUrl = request.BaseUrl.TrimEnd('/');
 
             if (request.Smtp != null)
             {

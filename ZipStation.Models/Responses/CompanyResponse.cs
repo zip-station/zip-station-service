@@ -20,5 +20,6 @@ public class CompanySettingsResponse
 {
     public string DefaultTimezone { get; set; } = string.Empty;
     public string DefaultLanguage { get; set; } = string.Empty;
+    public string? BaseUrl { get; set; }
     public SmtpSettingsResponse? Smtp { get; set; }
 }

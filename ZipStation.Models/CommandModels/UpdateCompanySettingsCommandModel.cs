@@ -4,6 +4,7 @@ public class UpdateCompanySettingsCommandModel
 {
     public string? DefaultTimezone { get; set; }
     public string? DefaultLanguage { get; set; }
+    public string? BaseUrl { get; set; }
     public UpdateCompanySmtpCommandModel? Smtp { get; set; }
 }
 
