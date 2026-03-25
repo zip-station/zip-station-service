@@ -129,6 +129,40 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization();
 
+// --- Firebase Admin SDK (for user management) ---
+var fbProjectId = Environment.GetEnvironmentVariable("FIREBASE_ADMIN_PROJECT_ID")
+    ?? appConfig.Firebase?.BearerTokenAudience;
+var fbClientEmail = Environment.GetEnvironmentVariable("FIREBASE_ADMIN_CLIENT_EMAIL");
+var fbPrivateKey = Environment.GetEnvironmentVariable("FIREBASE_ADMIN_PRIVATE_KEY");
+if (!string.IsNullOrEmpty(fbClientEmail) && !string.IsNullOrEmpty(fbPrivateKey))
+{
+    try
+    {
+        // Reconstruct the JSON that GoogleCredential expects
+        var serviceAccountJson = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            type = "service_account",
+            project_id = fbProjectId ?? "",
+            private_key = fbPrivateKey.Replace("\\n", "\n"),
+            client_email = fbClientEmail,
+            token_uri = "https://oauth2.googleapis.com/token"
+        });
+        FirebaseAdmin.FirebaseApp.Create(new FirebaseAdmin.AppOptions
+        {
+            Credential = Google.Apis.Auth.OAuth2.GoogleCredential.FromJson(serviceAccountJson)
+        });
+        Log.Information("Firebase Admin SDK initialized");
+    }
+    catch (Exception ex)
+    {
+        Log.Warning(ex, "Failed to initialize Firebase Admin SDK — user deletion from Firebase will not work");
+    }
+}
+else
+{
+    Log.Warning("FIREBASE_ADMIN_CLIENT_EMAIL/FIREBASE_ADMIN_PRIVATE_KEY not set — Firebase Admin SDK not initialized. User deletion from Firebase will not work.");
+}
+
 // --- AutoMapper ---
 builder.Services.AddAutoMapper(typeof(ZipStation.Mapping.CompanyMappingProfile).Assembly);
 
