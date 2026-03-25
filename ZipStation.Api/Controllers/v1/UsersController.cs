@@ -310,10 +310,13 @@ public class UsersController : BaseController
             }
 
             // Create a new user record (no FirebaseUserId yet — they'll link on sign-up)
+            var inviteCode = Guid.NewGuid().ToString("N"); // 32-char hex string
             var user = new User
             {
                 Email = request.Email.Trim().ToLowerInvariant(),
                 DisplayName = request.DisplayName ?? string.Empty,
+                InviteCode = inviteCode,
+                InviteCodeExpiresOn = DateTimeOffset.UtcNow.AddDays(7).ToUnixTimeMilliseconds(),
                 CompanyMemberships = new List<CompanyMembership>
                 {
                     new CompanyMembership
@@ -346,7 +349,7 @@ public class UsersController : BaseController
             // Send invite email in background if company SMTP is configured
             _ = Task.Run(async () =>
             {
-                try { await SendInviteEmailAsync(companyId, request.Email, request.DisplayName); }
+                try { await SendInviteEmailAsync(companyId, request.Email, request.DisplayName, inviteCode); }
                 catch (Exception ex) { _logger.LogError(ex, "Failed to send invite email to {Email}", request.Email); }
             });
 
@@ -371,7 +374,12 @@ public class UsersController : BaseController
             if (!string.IsNullOrEmpty(user.FirebaseUserId))
                 return BadRequest(new BadRequestResponse { Message = "User has already signed up" });
 
-            await SendInviteEmailAsync(companyId, user.Email, user.DisplayName);
+            // Regenerate invite code
+            user.InviteCode = Guid.NewGuid().ToString("N");
+            user.InviteCodeExpiresOn = DateTimeOffset.UtcNow.AddDays(7).ToUnixTimeMilliseconds();
+            await _userRepository.UpdateAsync(user);
+
+            await SendInviteEmailAsync(companyId, user.Email, user.DisplayName, user.InviteCode);
             return Ok();
         }
         catch (Exception ex)
@@ -381,7 +389,7 @@ public class UsersController : BaseController
         }
     }
 
-    private async Task SendInviteEmailAsync(string companyId, string toEmail, string? toName)
+    private async Task SendInviteEmailAsync(string companyId, string toEmail, string? toName, string? inviteCode = null)
     {
         var company = await _companyRepository.GetAsync(companyId);
         var smtp = company?.Settings?.Smtp;
@@ -395,12 +403,21 @@ public class UsersController : BaseController
         mimeMessage.To.Add(new MailboxAddress(toName ?? toEmail, toEmail));
         mimeMessage.Subject = $"You've been invited to {company.Name} on Zip Station";
 
-        var body = $"<p>Hi {toName ?? toEmail.Split('@')[0]},</p>" +
+        var baseUrl = company.Settings?.BaseUrl;
+        var signupLink = !string.IsNullOrEmpty(baseUrl) && !string.IsNullOrEmpty(inviteCode)
+            ? $"{baseUrl}/setup?code={inviteCode}" : null;
+        var linkHtml = signupLink != null
+            ? $"<p><a href=\"{signupLink}\" style=\"display:inline-block;padding:10px 24px;background-color:#2563eb;color:#ffffff;text-decoration:none;border-radius:6px;font-weight:600\">Get Started</a></p>"
+            : "<p>Sign up or log in to get started.</p>";
+        var linkText = signupLink != null ? $"Get started: {signupLink}" : "Sign up or log in to get started.";
+
+        var displayName = toName ?? toEmail.Split('@')[0];
+        var body = $"<p>Hi {displayName},</p>" +
                    $"<p>You've been invited to join <strong>{company.Name}</strong> on Zip Station.</p>" +
-                   $"<p>Sign up or log in to get started.</p>" +
+                   linkHtml +
                    $"<p>— {company.Name} Team</p>";
 
-        var bodyBuilder = new BodyBuilder { HtmlBody = body, TextBody = $"Hi {toName ?? toEmail.Split('@')[0]},\n\nYou've been invited to join {company.Name} on Zip Station.\n\nSign up or log in to get started.\n\n— {company.Name} Team" };
+        var bodyBuilder = new BodyBuilder { HtmlBody = body, TextBody = $"Hi {displayName},\n\nYou've been invited to join {company.Name} on Zip Station.\n\n{linkText}\n\n— {company.Name} Team" };
         mimeMessage.Body = bodyBuilder.ToMessageBody();
 
         var password = EncryptionHelper.Decrypt(smtp.Password);
@@ -471,6 +488,22 @@ public class UsersController : BaseController
                 // Soft-delete the user if no remaining company memberships
                 targetUser.IsVoid = true;
                 await _userRepository.UpdateAsync(targetUser);
+
+                // Delete the Firebase account so the email can be reused
+                if (!string.IsNullOrEmpty(targetUser.FirebaseUserId))
+                {
+                    try
+                    {
+                        await FirebaseAdmin.Auth.FirebaseAuth.DefaultInstance
+                            .DeleteUserAsync(targetUser.FirebaseUserId);
+                        _logger.LogInformation("Firebase account deleted for user {UserId}", id);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to delete Firebase account for user {UserId}", id);
+                    }
+                }
+
                 _logger.LogInformation("User {UserId} soft-deleted (no remaining memberships)", id);
             }
             else

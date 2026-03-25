@@ -27,6 +27,11 @@ public class User : BaseEntity
     public UserPreferences Preferences { get; set; } = new();
 
     public bool IsDisabled { get; set; }
+
+    [BsonIgnoreIfNull]
+    public string? InviteCode { get; set; }
+
+    public long InviteCodeExpiresOn { get; set; }
 }
 
 public class UserPreferences
