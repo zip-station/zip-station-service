@@ -1,7 +1,6 @@
-using Microsoft.Extensions.Options;
 using ZipStation.Business.Helpers;
-using ZipStation.Business.Repositories;
-using ZipStation.Models.Enums;
+using ZipStation.Business.Services;
+using ZipStation.Models.Constants;
 using ZipStation.Models.Responses;
 
 namespace ZipStation.Business.Gateways;
@@ -19,12 +18,12 @@ public interface ICompanyGateway
 public class CompanyGateway : ICompanyGateway
 {
     private readonly IAppUser _appUser;
-    private readonly IUserRepository _userRepository;
+    private readonly IPermissionService _permissionService;
 
-    public CompanyGateway(IAppUser appUser, IUserRepository userRepository)
+    public CompanyGateway(IAppUser appUser, IPermissionService permissionService)
     {
         _appUser = appUser;
-        _userRepository = userRepository;
+        _permissionService = permissionService;
     }
 
     public async Task<GatewayResponse> CanCreateCompanyAsync()
@@ -40,10 +39,8 @@ public class CompanyGateway : ICompanyGateway
         if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
             return Unauthorized();
 
-        var user = await GetCurrentUser();
-        if (user == null) return Unauthorized("User not found");
-
-        if (!HasCompanyMembership(user, companyId))
+        // Any permission check will confirm the user has a role in this company
+        if (!await _permissionService.HasPermissionAsync(_appUser.UserId, companyId, Permissions.DashboardView))
             return Unauthorized("You are not a member of this company");
 
         return Ok();
@@ -51,17 +48,35 @@ public class CompanyGateway : ICompanyGateway
 
     public async Task<GatewayResponse> CanReplaceCompanyAsync(string companyId)
     {
-        return await RequireCompanyRole(companyId, CompanyRole.Admin);
+        if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
+            return Unauthorized();
+
+        if (!await _permissionService.IsOwnerAsync(_appUser.UserId, companyId))
+            return Unauthorized("Insufficient permissions");
+
+        return Ok();
     }
 
     public async Task<GatewayResponse> CanUpdateCompanyAsync(string companyId)
     {
-        return await RequireCompanyRole(companyId, CompanyRole.Admin);
+        if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
+            return Unauthorized();
+
+        if (!await _permissionService.IsOwnerAsync(_appUser.UserId, companyId))
+            return Unauthorized("Insufficient permissions");
+
+        return Ok();
     }
 
     public async Task<GatewayResponse> CanDeleteCompanyAsync(string companyId)
     {
-        return await RequireCompanyRole(companyId, CompanyRole.Owner);
+        if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
+            return Unauthorized();
+
+        if (!await _permissionService.IsOwnerAsync(_appUser.UserId, companyId))
+            return Unauthorized("Insufficient permissions");
+
+        return Ok();
     }
 
     public async Task<GatewayResponse> CanListCompaniesAsync()
@@ -70,40 +85,6 @@ public class CompanyGateway : ICompanyGateway
             return Unauthorized();
 
         return Ok();
-    }
-
-    private async Task<GatewayResponse> RequireCompanyRole(string companyId, CompanyRole minimumRole)
-    {
-        if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
-            return Unauthorized();
-
-        var user = await GetCurrentUser();
-        if (user == null) return Unauthorized("User not found");
-
-        var membership = user.CompanyMemberships.FirstOrDefault(m => m.CompanyId == companyId);
-        if (membership == null)
-            return Unauthorized("You are not a member of this company");
-
-        if (!MeetsMinimumRole(membership.Role, minimumRole))
-            return Unauthorized($"Requires {minimumRole} role or higher");
-
-        return Ok();
-    }
-
-    private async Task<Models.Entities.User?> GetCurrentUser()
-    {
-        return await _userRepository.GetByFirebaseUserIdAsync(_appUser.UserId!);
-    }
-
-    private static bool HasCompanyMembership(Models.Entities.User user, string companyId)
-    {
-        return user.CompanyMemberships.Any(m => m.CompanyId == companyId);
-    }
-
-    private static bool MeetsMinimumRole(CompanyRole actual, CompanyRole required)
-    {
-        // Owner(0) > Admin(1) > Member(2) — lower enum value = higher privilege
-        return (int)actual <= (int)required;
     }
 
     private static GatewayResponse Ok() => new() { ResponseStatus = GatewayResponseCodes.Ok };

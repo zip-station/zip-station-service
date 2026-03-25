@@ -10,7 +10,7 @@ using ZipStation.Business.Helpers;
 using ZipStation.Business.Repositories;
 using ZipStation.Models.CommandModels;
 using ZipStation.Models.Entities;
-using ZipStation.Models.Enums;
+
 using ZipStation.Models.Responses;
 
 namespace ZipStation.Api.Controllers.v1;
@@ -134,7 +134,27 @@ public class UsersController : BaseController
             var user = await _userRepository.GetByFirebaseUserIdAsync(_appUser.UserId);
             if (user == null) return NotFound();
 
-            return Ok(_mapper.Map<UserResponse>(user));
+            var response = _mapper.Map<UserResponse>(user);
+
+            // Check if user is owner of any of their companies
+            var companyIds = user.RoleAssignments.Select(ra => ra.CompanyId).Distinct().ToList();
+            foreach (var cid in companyIds)
+            {
+                var company = await _companyRepository.GetAsync(cid);
+                if (company != null && company.OwnerUserId == user.Id)
+                {
+                    response.IsOwner = true;
+                    break;
+                }
+            }
+            // Also check if they're an owner even without role assignments (fresh setup)
+            if (!response.IsOwner)
+            {
+                var ownedCompanies = await _companyRepository.GetByOwnerUserIdAsync(user.Id);
+                if (ownedCompanies.Any()) response.IsOwner = true;
+            }
+
+            return Ok(response);
         }
         catch (Exception ex)
         {
@@ -246,7 +266,32 @@ public class UsersController : BaseController
                 return ProcessGatewayResponse(gatewayResponse);
 
             var users = await _userRepository.GetByCompanyIdAsync(companyId);
-            return Ok(_mapper.Map<List<UserResponse>>(users));
+
+            // Also include the owner if they don't have role assignments for this company
+            var company = await _companyRepository.GetAsync(companyId);
+            if (company != null && !string.IsNullOrEmpty(company.OwnerUserId))
+            {
+                var ownerAlreadyIncluded = users.Any(u => u.Id == company.OwnerUserId);
+                if (!ownerAlreadyIncluded)
+                {
+                    var owner = await _userRepository.GetAsync(company.OwnerUserId);
+                    if (owner != null) users.Insert(0, owner);
+                }
+            }
+
+            var responses = _mapper.Map<List<UserResponse>>(users);
+
+            // Set IsOwner flag
+            if (company != null)
+            {
+                foreach (var r in responses)
+                {
+                    var user = users.First(u => u.Id == r.Id);
+                    r.IsOwner = user.Id == company.OwnerUserId;
+                }
+            }
+
+            return Ok(responses);
         }
         catch (Exception ex)
         {
@@ -277,28 +322,29 @@ public class UsersController : BaseController
             if (existing != null)
             {
                 // Check if already a member of this company
-                if (existing.CompanyMemberships.Any(m => m.CompanyId == companyId))
+                if (existing.RoleAssignments.Any(ra => ra.CompanyId == companyId))
                     return BadRequest(new BadRequestResponse { Message = "User is already a member of this company" });
 
-                // Add company membership to existing user
-                existing.CompanyMemberships.Add(new CompanyMembership
+                // Add a company-level role assignment as a placeholder
+                existing.RoleAssignments.Add(new RoleAssignment
                 {
                     CompanyId = companyId,
-                    Role = request.CompanyRole
+                    RoleId = string.Empty,
+                    ProjectId = null
                 });
 
-                // Add project memberships if specified
+                // Add project-level role assignments if specified
                 if (request.ProjectIds != null)
                 {
                     foreach (var projectId in request.ProjectIds)
                     {
-                        if (!existing.ProjectMemberships.Any(pm => pm.ProjectId == projectId && pm.CompanyId == companyId))
+                        if (!existing.RoleAssignments.Any(ra => ra.ProjectId == projectId && ra.CompanyId == companyId))
                         {
-                            existing.ProjectMemberships.Add(new ProjectMembership
+                            existing.RoleAssignments.Add(new RoleAssignment
                             {
                                 CompanyId = companyId,
-                                ProjectId = projectId,
-                                Role = ProjectRole.Agent
+                                RoleId = string.Empty,
+                                ProjectId = projectId
                             });
                         }
                     }
@@ -317,27 +363,27 @@ public class UsersController : BaseController
                 DisplayName = request.DisplayName ?? string.Empty,
                 InviteCode = inviteCode,
                 InviteCodeExpiresOn = DateTimeOffset.UtcNow.AddDays(7).ToUnixTimeMilliseconds(),
-                CompanyMemberships = new List<CompanyMembership>
+                RoleAssignments = new List<RoleAssignment>
                 {
-                    new CompanyMembership
+                    new RoleAssignment
                     {
                         CompanyId = companyId,
-                        Role = request.CompanyRole
+                        RoleId = string.Empty,
+                        ProjectId = null
                     }
-                },
-                ProjectMemberships = new List<ProjectMembership>()
+                }
             };
 
-            // Add project memberships if specified
+            // Add project-level role assignments if specified
             if (request.ProjectIds != null)
             {
                 foreach (var projectId in request.ProjectIds)
                 {
-                    user.ProjectMemberships.Add(new ProjectMembership
+                    user.RoleAssignments.Add(new RoleAssignment
                     {
                         CompanyId = companyId,
-                        ProjectId = projectId,
-                        Role = ProjectRole.Agent
+                        RoleId = string.Empty,
+                        ProjectId = projectId
                     });
                 }
             }
@@ -447,8 +493,8 @@ public class UsersController : BaseController
             var requestingUser = await _userRepository.GetByFirebaseUserIdAsync(_appUser.UserId!);
             if (requestingUser == null) return Unauthorized();
 
-            var requestingMembership = requestingUser.CompanyMemberships.FirstOrDefault(m => m.CompanyId == companyId);
-            if (requestingMembership == null)
+            var hasCompanyAccess = requestingUser.RoleAssignments.Any(ra => ra.CompanyId == companyId);
+            if (!hasCompanyAccess)
                 return StatusCode(403, new BadRequestResponse { Message = "You are not a member of this company" });
 
             // Cannot delete yourself
@@ -459,31 +505,20 @@ public class UsersController : BaseController
             var targetUser = await _userRepository.GetAsync(id);
             if (targetUser == null) return NotFound();
 
-            var targetMembership = targetUser.CompanyMemberships.FirstOrDefault(m => m.CompanyId == companyId);
-            if (targetMembership == null)
+            var targetHasCompanyAccess = targetUser.RoleAssignments.Any(ra => ra.CompanyId == companyId);
+            if (!targetHasCompanyAccess)
                 return BadRequest(new BadRequestResponse { Message = "Target user is not a member of this company" });
 
-            // Permission checks: Owner can delete anyone, Admin can delete Members only
-            if (requestingMembership.Role == CompanyRole.Owner)
-            {
-                // Owner can delete anyone except themselves (already checked above)
-            }
-            else if (requestingMembership.Role == CompanyRole.Admin)
-            {
-                if (targetMembership.Role != CompanyRole.Member)
-                    return StatusCode(403, new BadRequestResponse { Message = "Admins can only remove Members" });
-            }
-            else
-            {
+            // Permission check: only company owner can delete members
+            var company = await _companyRepository.GetAsync(companyId);
+            if (company == null) return NotFound();
+            if (company.OwnerUserId != requestingUser.Id)
                 return StatusCode(403, new BadRequestResponse { Message = "You do not have permission to remove members" });
-            }
 
-            // Remove company membership
-            targetUser.CompanyMemberships.RemoveAll(m => m.CompanyId == companyId);
-            // Remove project memberships for this company
-            targetUser.ProjectMemberships.RemoveAll(m => m.CompanyId == companyId);
+            // Remove all role assignments for this company
+            targetUser.RoleAssignments.RemoveAll(ra => ra.CompanyId == companyId);
 
-            if (targetUser.CompanyMemberships.Count == 0)
+            if (targetUser.RoleAssignments.Count == 0)
             {
                 // Soft-delete the user if no remaining company memberships
                 targetUser.IsVoid = true;
@@ -537,8 +572,8 @@ public class UsersController : BaseController
             var requestingUser = await _userRepository.GetByFirebaseUserIdAsync(_appUser.UserId!);
             if (requestingUser == null) return Unauthorized();
 
-            var requestingMembership = requestingUser.CompanyMemberships.FirstOrDefault(m => m.CompanyId == companyId);
-            if (requestingMembership == null)
+            var hasCompanyAccess = requestingUser.RoleAssignments.Any(ra => ra.CompanyId == companyId);
+            if (!hasCompanyAccess)
                 return StatusCode(403, new BadRequestResponse { Message = "You are not a member of this company" });
 
             // Cannot disable yourself
@@ -549,24 +584,15 @@ public class UsersController : BaseController
             var targetUser = await _userRepository.GetAsync(id);
             if (targetUser == null) return NotFound();
 
-            var targetMembership = targetUser.CompanyMemberships.FirstOrDefault(m => m.CompanyId == companyId);
-            if (targetMembership == null)
+            var targetHasCompanyAccess = targetUser.RoleAssignments.Any(ra => ra.CompanyId == companyId);
+            if (!targetHasCompanyAccess)
                 return BadRequest(new BadRequestResponse { Message = "Target user is not a member of this company" });
 
-            // Permission checks: Owner can disable anyone, Admin can disable Members only
-            if (requestingMembership.Role == CompanyRole.Owner)
-            {
-                // Owner can disable/enable anyone
-            }
-            else if (requestingMembership.Role == CompanyRole.Admin)
-            {
-                if (targetMembership.Role != CompanyRole.Member)
-                    return StatusCode(403, new BadRequestResponse { Message = "Admins can only disable/enable Members" });
-            }
-            else
-            {
+            // Permission check: only company owner can disable members
+            var company = await _companyRepository.GetAsync(companyId);
+            if (company == null) return NotFound();
+            if (company.OwnerUserId != requestingUser.Id)
                 return StatusCode(403, new BadRequestResponse { Message = "You do not have permission to disable members" });
-            }
 
             // Toggle the disabled state
             targetUser.IsDisabled = !targetUser.IsDisabled;
@@ -583,6 +609,65 @@ public class UsersController : BaseController
             return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
         }
     }
+    [HttpPost("{id}/transfer-ownership")]
+    [MapToApiVersion("1.0")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(BadRequestResponse), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> TransferOwnership(string id, [FromQuery] string companyId)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(companyId))
+                return BadRequest(new BadRequestResponse { Message = "companyId is required" });
+
+            var requestingUser = await _userRepository.GetByFirebaseUserIdAsync(_appUser.UserId!);
+            if (requestingUser == null) return Unauthorized();
+
+            var company = await _companyRepository.GetAsync(companyId);
+            if (company == null) return NotFound();
+
+            // Only the current owner can transfer ownership
+            if (company.OwnerUserId != requestingUser.Id)
+                return StatusCode(403, new BadRequestResponse { Message = "Only the current owner can transfer ownership" });
+
+            // Cannot transfer to yourself
+            if (requestingUser.Id == id)
+                return BadRequest(new BadRequestResponse { Message = "You are already the owner" });
+
+            // Target must exist and be in the company
+            var targetUser = await _userRepository.GetAsync(id);
+            if (targetUser == null) return NotFound();
+
+            if (!targetUser.RoleAssignments.Any(ra => ra.CompanyId == companyId))
+                return BadRequest(new BadRequestResponse { Message = "Target user is not a member of this company" });
+
+            // Transfer ownership
+            company.OwnerUserId = targetUser.Id;
+            await _companyRepository.UpdateAsync(company);
+
+            // Ensure the new owner has a company-wide role assignment
+            if (!targetUser.RoleAssignments.Any(ra => ra.CompanyId == companyId && ra.ProjectId == null))
+            {
+                targetUser.RoleAssignments.Add(new RoleAssignment
+                {
+                    CompanyId = companyId,
+                    RoleId = string.Empty,
+                    ProjectId = null
+                });
+                await _userRepository.UpdateAsync(targetUser);
+            }
+
+            _logger.LogInformation("Ownership of company {CompanyId} transferred from {OldOwner} to {NewOwner}",
+                companyId, requestingUser.Id, targetUser.Id);
+
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error transferring ownership of company {CompanyId}", companyId);
+            return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
+        }
+    }
 }
 
 public class UpdateUserPreferencesRequest
@@ -595,6 +680,5 @@ public class InviteUserRequest
 {
     public string Email { get; set; } = string.Empty;
     public string? DisplayName { get; set; }
-    public CompanyRole CompanyRole { get; set; } = CompanyRole.Member;
     public List<string>? ProjectIds { get; set; }
 }

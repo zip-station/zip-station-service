@@ -7,7 +7,7 @@ using MongoDB.Driver;
 using ZipStation.Business.Helpers;
 using ZipStation.Business.Repositories;
 using ZipStation.Models.Entities;
-using ZipStation.Models.Enums;
+
 
 namespace ZipStation.Api.Controllers.v1;
 
@@ -93,15 +93,7 @@ public class SystemController : BaseController
         {
             invited.FirebaseUserId = firebaseUserId;
             invited.DisplayName = request.DisplayName ?? email.Split('@')[0];
-            // Ensure they have Owner membership for the new company
-            if (!invited.CompanyMemberships.Any(m => m.CompanyId == createdCompany.Id))
-            {
-                invited.CompanyMemberships.Add(new CompanyMembership
-                {
-                    CompanyId = createdCompany.Id,
-                    Role = CompanyRole.Owner
-                });
-            }
+            invited.RoleAssignments ??= new List<RoleAssignment>();
             createdUser = await _userRepository.UpdateAsync(invited);
         }
         else
@@ -111,14 +103,7 @@ public class SystemController : BaseController
                 FirebaseUserId = firebaseUserId,
                 Email = email,
                 DisplayName = request.DisplayName ?? email.Split('@')[0],
-                CompanyMemberships = new List<CompanyMembership>
-                {
-                    new CompanyMembership
-                    {
-                        CompanyId = createdCompany.Id,
-                        Role = CompanyRole.Owner
-                    }
-                }
+                RoleAssignments = new List<RoleAssignment>()
             };
 
             createdUser = await _userRepository.CreateAsync(user);
@@ -126,6 +111,15 @@ public class SystemController : BaseController
 
         createdCompany.OwnerUserId = createdUser.Id;
         await _companyRepository.UpdateAsync(createdCompany);
+
+        // Add a company-wide role assignment so the owner shows up in company member queries
+        createdUser.RoleAssignments.Add(new RoleAssignment
+        {
+            CompanyId = createdCompany.Id,
+            RoleId = string.Empty,
+            ProjectId = null
+        });
+        await _userRepository.UpdateAsync(createdUser);
 
         _logger.LogInformation("System initialized by {Email} — Company: {CompanyName}", email, request.CompanyName);
 

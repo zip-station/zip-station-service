@@ -1,6 +1,6 @@
 using ZipStation.Business.Helpers;
-using ZipStation.Business.Repositories;
-using ZipStation.Models.Enums;
+using ZipStation.Business.Services;
+using ZipStation.Models.Constants;
 using ZipStation.Models.Responses;
 
 namespace ZipStation.Business.Gateways;
@@ -13,30 +13,21 @@ public interface IAuditLogGateway
 public class AuditLogGateway : IAuditLogGateway
 {
     private readonly IAppUser _appUser;
-    private readonly IUserRepository _userRepository;
+    private readonly IPermissionService _permissionService;
 
-    public AuditLogGateway(IAppUser appUser, IUserRepository userRepository)
+    public AuditLogGateway(IAppUser appUser, IPermissionService permissionService)
     {
         _appUser = appUser;
-        _userRepository = userRepository;
+        _permissionService = permissionService;
     }
 
     public async Task<GatewayResponse> CanViewAuditLogAsync(string companyId)
     {
-        return await RequireCompanyRole(companyId, CompanyRole.Admin);
-    }
-
-    private async Task<GatewayResponse> RequireCompanyRole(string companyId, CompanyRole minimumRole)
-    {
         if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
             return Unauthorized();
 
-        var user = await _userRepository.GetByFirebaseUserIdAsync(_appUser.UserId);
-        if (user == null) return Unauthorized("User not found");
-
-        var membership = user.CompanyMemberships.FirstOrDefault(m => m.CompanyId == companyId);
-        if (membership == null) return Unauthorized("You are not a member of this company");
-        if ((int)membership.Role > (int)minimumRole) return Unauthorized($"Requires {minimumRole} role or higher");
+        if (!await _permissionService.HasPermissionAsync(_appUser.UserId, companyId, Permissions.AuditLogView))
+            return Unauthorized("Insufficient permissions");
 
         return Ok();
     }

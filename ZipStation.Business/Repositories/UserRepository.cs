@@ -34,8 +34,8 @@ public class UserRepository : BaseRepository<User>, IUserRepository
 
     public async Task<List<User>> GetByCompanyIdAsync(string companyId)
     {
-        var filter = Builders<User>.Filter.ElemMatch(u => u.CompanyMemberships,
-                        m => m.CompanyId == companyId)
+        var filter = Builders<User>.Filter.ElemMatch(u => u.RoleAssignments,
+                        ra => ra.CompanyId == companyId)
                    & Builders<User>.Filter.Eq(u => u.IsVoid, false);
         return await _Collection.Find(filter).ToListAsync();
     }

@@ -42,6 +42,7 @@ public class ZipStationMongoDbCollections
     public string WorkerTriggers { get; set; } = "workerTriggers";
     public string ProjectApiKeys { get; set; } = "projectApiKeys";
     public string TicketDrafts { get; set; } = "ticketDrafts";
+    public string Roles { get; set; } = "roles";
 }
 
 public class FirebaseConfiguration

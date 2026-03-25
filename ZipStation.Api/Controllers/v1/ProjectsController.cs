@@ -413,14 +413,13 @@ public class ProjectsController : BaseController
 
             var companyUsers = await _userRepository.GetByCompanyIdAsync(companyId);
             var members = companyUsers
-                .Where(u => u.ProjectMemberships.Any(pm => pm.ProjectId == id))
+                .Where(u => u.RoleAssignments.Any(ra => ra.ProjectId == id || (ra.CompanyId == companyId && ra.ProjectId == null)))
                 .Select(u => new ProjectMemberResponse
                 {
                     UserId = u.Id,
                     Email = u.Email,
                     DisplayName = u.DisplayName,
-                    AvatarUrl = u.AvatarUrl,
-                    Role = u.ProjectMemberships.First(pm => pm.ProjectId == id).Role
+                    AvatarUrl = u.AvatarUrl
                 })
                 .ToList();
 
@@ -447,29 +446,28 @@ public class ProjectsController : BaseController
             var user = await _userRepository.GetAsync(request.UserId);
             if (user == null) return NotFound(new BadRequestResponse { Message = "User not found" });
 
-            if (!user.CompanyMemberships.Any(cm => cm.CompanyId == companyId))
+            if (!user.RoleAssignments.Any(ra => ra.CompanyId == companyId))
                 return BadRequest(new BadRequestResponse { Message = "User is not a member of this company" });
 
-            if (user.ProjectMemberships.Any(pm => pm.ProjectId == id))
+            if (user.RoleAssignments.Any(ra => ra.ProjectId == id))
                 return BadRequest(new BadRequestResponse { Message = "User is already a member of this project" });
 
-            user.ProjectMemberships.Add(new ProjectMembership
+            user.RoleAssignments.Add(new RoleAssignment
             {
                 CompanyId = companyId,
-                ProjectId = id,
-                Role = request.Role
+                RoleId = string.Empty,
+                ProjectId = id
             });
 
             await _userRepository.UpdateAsync(user);
 
-            _logger.LogInformation("User {UserId} added to project {ProjectId} as {Role}", request.UserId, id, request.Role);
+            _logger.LogInformation("User {UserId} added to project {ProjectId}", request.UserId, id);
             return Ok(new ProjectMemberResponse
             {
                 UserId = user.Id,
                 Email = user.Email,
                 DisplayName = user.DisplayName,
-                AvatarUrl = user.AvatarUrl,
-                Role = request.Role
+                AvatarUrl = user.AvatarUrl
             });
         }
         catch (Exception ex)
@@ -493,7 +491,7 @@ public class ProjectsController : BaseController
             var user = await _userRepository.GetAsync(userId);
             if (user == null) return NotFound();
 
-            user.ProjectMemberships.RemoveAll(pm => pm.ProjectId == id);
+            user.RoleAssignments.RemoveAll(ra => ra.ProjectId == id);
             await _userRepository.UpdateAsync(user);
 
             _logger.LogInformation("User {UserId} removed from project {ProjectId}", userId, id);
@@ -596,7 +594,6 @@ public class TestConnectionRequest
 public class AddProjectMemberRequest
 {
     public string UserId { get; set; } = string.Empty;
-    public ProjectRole Role { get; set; } = ProjectRole.Agent;
 }
 
 public class ProjectMemberResponse
@@ -605,5 +602,4 @@ public class ProjectMemberResponse
     public string Email { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public string? AvatarUrl { get; set; }
-    public ProjectRole Role { get; set; }
 }

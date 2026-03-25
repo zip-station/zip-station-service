@@ -7,7 +7,7 @@ using ZipStation.Business.Helpers;
 using ZipStation.Business.Repositories;
 using ZipStation.Models.CommandModels;
 using ZipStation.Models.Entities;
-using ZipStation.Models.Enums;
+
 using ZipStation.Models.Responses;
 
 namespace ZipStation.Api.Controllers.v1;
@@ -59,22 +59,15 @@ public class CompaniesController : BaseController
             if (existingSlug != null)
                 return BadRequest(new BadRequestResponse { Message = "A company with this slug already exists" });
 
+            var currentUser = await _userRepository.GetByFirebaseUserIdAsync(_appUser.UserId!);
+            if (currentUser == null) return Unauthorized();
+
             var company = _mapper.Map<Company>(commandModel);
-            company.OwnerUserId = _appUser.UserId!;
+            company.OwnerUserId = currentUser.Id;
 
             var created = await _companyRepository.CreateAsync(company);
 
-            // Add the creator as Owner of this company
-            var user = await _userRepository.GetByFirebaseUserIdAsync(_appUser.UserId!);
-            if (user != null)
-            {
-                user.CompanyMemberships.Add(new CompanyMembership
-                {
-                    CompanyId = created.Id,
-                    Role = CompanyRole.Owner
-                });
-                await _userRepository.UpdateAsync(user);
-            }
+            // Owner is tracked on the Company entity via OwnerUserId (set above)
 
             _logger.LogInformation("Company created: {CompanyId} by user {UserId}", created.Id, _appUser.UserId);
             return Ok(_mapper.Map<CompanyResponse>(created));
@@ -124,8 +117,14 @@ public class CompaniesController : BaseController
             var user = await _userRepository.GetByFirebaseUserIdAsync(_appUser.UserId!);
             if (user == null) return Ok(new List<CompanyResponse>());
 
-            var companyIds = user.CompanyMemberships.Select(m => m.CompanyId).ToList();
+            var companyIds = user.RoleAssignments.Select(ra => ra.CompanyId).Distinct().ToList();
             var companies = await _companyRepository.GetByIdsAsync(companyIds);
+
+            // Also include companies where the user is the owner
+            var ownedCompanies = await _companyRepository.GetByOwnerUserIdAsync(user.Id);
+            var ownedIds = ownedCompanies.Select(c => c.Id).Except(companyIds).ToList();
+            if (ownedIds.Any())
+                companies = companies.Concat(ownedCompanies.Where(c => ownedIds.Contains(c.Id))).ToList();
 
             return Ok(_mapper.Map<List<CompanyResponse>>(companies));
         }

@@ -84,6 +84,9 @@ public static class DependencyInjection
 
         builder.Services.AddScoped<IReportRepository>(sp =>
             new ReportRepository(sp.GetRequiredService<IMongoDatabase>(), collections.Reports));
+
+        builder.Services.AddScoped<IRoleRepository>(sp =>
+            new RoleRepository(sp.GetRequiredService<IMongoDatabase>(), collections.Roles));
     }
 
     private static void SetupGateways(WebApplicationBuilder builder)
@@ -108,5 +111,6 @@ public static class DependencyInjection
         builder.Services.AddScoped<ZipStation.Business.Services.IAuditService, ZipStation.Business.Services.AuditService>();
         builder.Services.AddSingleton<ZipStation.Business.Services.IConnectionTestService, ZipStation.Business.Services.ConnectionTestService>();
         builder.Services.AddScoped<IAlertService, AlertService>();
+        builder.Services.AddScoped<IPermissionService, PermissionService>();
     }
 }

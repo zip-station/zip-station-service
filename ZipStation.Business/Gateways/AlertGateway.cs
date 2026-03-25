@@ -1,6 +1,6 @@
 using ZipStation.Business.Helpers;
-using ZipStation.Business.Repositories;
-using ZipStation.Models.Enums;
+using ZipStation.Business.Services;
+using ZipStation.Models.Constants;
 using ZipStation.Models.Responses;
 
 namespace ZipStation.Business.Gateways;
@@ -16,59 +16,54 @@ public interface IAlertGateway
 public class AlertGateway : IAlertGateway
 {
     private readonly IAppUser _appUser;
-    private readonly IUserRepository _userRepository;
+    private readonly IPermissionService _permissionService;
 
-    public AlertGateway(IAppUser appUser, IUserRepository userRepository)
+    public AlertGateway(IAppUser appUser, IPermissionService permissionService)
     {
         _appUser = appUser;
-        _userRepository = userRepository;
+        _permissionService = permissionService;
     }
 
     public async Task<GatewayResponse> CanListAlertsAsync(string companyId)
     {
-        return await RequireCompanyMember(companyId);
-    }
-
-    public async Task<GatewayResponse> CanCreateAlertAsync(string companyId)
-    {
-        return await RequireCompanyRole(companyId, CompanyRole.Admin);
-    }
-
-    public async Task<GatewayResponse> CanUpdateAlertAsync(string companyId)
-    {
-        return await RequireCompanyRole(companyId, CompanyRole.Admin);
-    }
-
-    public async Task<GatewayResponse> CanDeleteAlertAsync(string companyId)
-    {
-        return await RequireCompanyRole(companyId, CompanyRole.Admin);
-    }
-
-    private async Task<GatewayResponse> RequireCompanyMember(string companyId)
-    {
         if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
             return Unauthorized();
 
-        var user = await _userRepository.GetByFirebaseUserIdAsync(_appUser.UserId);
-        if (user == null) return Unauthorized("User not found");
-
-        if (!user.CompanyMemberships.Any(m => m.CompanyId == companyId))
-            return Unauthorized("You are not a member of this company");
+        if (!await _permissionService.HasPermissionAsync(_appUser.UserId, companyId, Permissions.AlertsView))
+            return Unauthorized("Insufficient permissions");
 
         return Ok();
     }
 
-    private async Task<GatewayResponse> RequireCompanyRole(string companyId, CompanyRole minimumRole)
+    public async Task<GatewayResponse> CanCreateAlertAsync(string companyId)
     {
         if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
             return Unauthorized();
 
-        var user = await _userRepository.GetByFirebaseUserIdAsync(_appUser.UserId);
-        if (user == null) return Unauthorized("User not found");
+        if (!await _permissionService.HasPermissionAsync(_appUser.UserId, companyId, Permissions.AlertsCreate))
+            return Unauthorized("Insufficient permissions");
 
-        var membership = user.CompanyMemberships.FirstOrDefault(m => m.CompanyId == companyId);
-        if (membership == null) return Unauthorized("You are not a member of this company");
-        if ((int)membership.Role > (int)minimumRole) return Unauthorized($"Requires {minimumRole} role or higher");
+        return Ok();
+    }
+
+    public async Task<GatewayResponse> CanUpdateAlertAsync(string companyId)
+    {
+        if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
+            return Unauthorized();
+
+        if (!await _permissionService.HasPermissionAsync(_appUser.UserId, companyId, Permissions.AlertsEdit))
+            return Unauthorized("Insufficient permissions");
+
+        return Ok();
+    }
+
+    public async Task<GatewayResponse> CanDeleteAlertAsync(string companyId)
+    {
+        if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
+            return Unauthorized();
+
+        if (!await _permissionService.HasPermissionAsync(_appUser.UserId, companyId, Permissions.AlertsDelete))
+            return Unauthorized("Insufficient permissions");
 
         return Ok();
     }

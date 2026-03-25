@@ -1,6 +1,6 @@
 using ZipStation.Business.Helpers;
-using ZipStation.Business.Repositories;
-using ZipStation.Models.Enums;
+using ZipStation.Business.Services;
+using ZipStation.Models.Constants;
 using ZipStation.Models.Responses;
 
 namespace ZipStation.Business.Gateways;
@@ -17,64 +17,65 @@ public interface ICustomerGateway
 public class CustomerGateway : ICustomerGateway
 {
     private readonly IAppUser _appUser;
-    private readonly IUserRepository _userRepository;
+    private readonly IPermissionService _permissionService;
 
-    public CustomerGateway(IAppUser appUser, IUserRepository userRepository)
+    public CustomerGateway(IAppUser appUser, IPermissionService permissionService)
     {
         _appUser = appUser;
-        _userRepository = userRepository;
+        _permissionService = permissionService;
     }
 
     public async Task<GatewayResponse> CanListCustomersAsync(string companyId)
     {
-        return await RequireCompanyMember(companyId);
-    }
-
-    public async Task<GatewayResponse> CanGetCustomerAsync(string companyId)
-    {
-        return await RequireCompanyMember(companyId);
-    }
-
-    public async Task<GatewayResponse> CanCreateCustomerAsync(string companyId, string projectId)
-    {
-        return await RequireCompanyMember(companyId);
-    }
-
-    public async Task<GatewayResponse> CanUpdateCustomerAsync(string companyId)
-    {
-        return await RequireCompanyMember(companyId);
-    }
-
-    public async Task<GatewayResponse> CanDeleteCustomerAsync(string companyId)
-    {
-        return await RequireCompanyRole(companyId, CompanyRole.Admin);
-    }
-
-    private async Task<GatewayResponse> RequireCompanyMember(string companyId)
-    {
         if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
             return Unauthorized();
 
-        var user = await _userRepository.GetByFirebaseUserIdAsync(_appUser.UserId);
-        if (user == null) return Unauthorized("User not found");
-
-        if (!user.CompanyMemberships.Any(m => m.CompanyId == companyId))
-            return Unauthorized("You are not a member of this company");
+        if (!await _permissionService.HasPermissionAsync(_appUser.UserId, companyId, Permissions.CustomersView))
+            return Unauthorized("Insufficient permissions");
 
         return Ok();
     }
 
-    private async Task<GatewayResponse> RequireCompanyRole(string companyId, CompanyRole minimumRole)
+    public async Task<GatewayResponse> CanGetCustomerAsync(string companyId)
     {
         if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
             return Unauthorized();
 
-        var user = await _userRepository.GetByFirebaseUserIdAsync(_appUser.UserId);
-        if (user == null) return Unauthorized("User not found");
+        if (!await _permissionService.HasPermissionAsync(_appUser.UserId, companyId, Permissions.CustomersView))
+            return Unauthorized("Insufficient permissions");
 
-        var membership = user.CompanyMemberships.FirstOrDefault(m => m.CompanyId == companyId);
-        if (membership == null) return Unauthorized("You are not a member of this company");
-        if ((int)membership.Role > (int)minimumRole) return Unauthorized($"Requires {minimumRole} role or higher");
+        return Ok();
+    }
+
+    public async Task<GatewayResponse> CanCreateCustomerAsync(string companyId, string projectId)
+    {
+        if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
+            return Unauthorized();
+
+        if (!await _permissionService.HasPermissionAsync(_appUser.UserId, companyId, Permissions.CustomersEdit, projectId))
+            return Unauthorized("Insufficient permissions");
+
+        return Ok();
+    }
+
+    public async Task<GatewayResponse> CanUpdateCustomerAsync(string companyId)
+    {
+        if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
+            return Unauthorized();
+
+        if (!await _permissionService.HasPermissionAsync(_appUser.UserId, companyId, Permissions.CustomersEdit))
+            return Unauthorized("Insufficient permissions");
+
+        return Ok();
+    }
+
+    public async Task<GatewayResponse> CanDeleteCustomerAsync(string companyId)
+    {
+        if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
+            return Unauthorized();
+
+        if (!await _permissionService.HasPermissionAsync(_appUser.UserId, companyId, Permissions.CustomersEdit))
+            return Unauthorized("Insufficient permissions");
 
         return Ok();
     }

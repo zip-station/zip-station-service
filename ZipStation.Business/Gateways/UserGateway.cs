@@ -1,6 +1,7 @@
 using ZipStation.Business.Helpers;
 using ZipStation.Business.Repositories;
-using ZipStation.Models.Enums;
+using ZipStation.Business.Services;
+using ZipStation.Models.Constants;
 using ZipStation.Models.Responses;
 
 namespace ZipStation.Business.Gateways;
@@ -19,11 +20,13 @@ public class UserGateway : IUserGateway
 {
     private readonly IAppUser _appUser;
     private readonly IUserRepository _userRepository;
+    private readonly IPermissionService _permissionService;
 
-    public UserGateway(IAppUser appUser, IUserRepository userRepository)
+    public UserGateway(IAppUser appUser, IUserRepository userRepository, IPermissionService permissionService)
     {
         _appUser = appUser;
         _userRepository = userRepository;
+        _permissionService = permissionService;
     }
 
     public async Task<GatewayResponse> CanCreateUserAsync()
@@ -39,16 +42,19 @@ public class UserGateway : IUserGateway
         if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
             return Unauthorized();
 
-        var currentUser = await GetCurrentUser();
+        var currentUser = await _userRepository.GetByFirebaseUserIdAsync(_appUser.UserId);
         if (currentUser == null) return Unauthorized("User not found");
 
+        // Users can always view themselves
         if (currentUser.Id == userId) return Ok();
 
+        // Check if the target user exists
         var targetUser = await _userRepository.GetAsync(userId);
         if (targetUser == null) return NotFound("User not found");
 
-        var sharedCompany = currentUser.CompanyMemberships
-            .Any(cm => targetUser.CompanyMemberships.Any(tm => tm.CompanyId == cm.CompanyId));
+        // Check if they share a company via role assignments
+        var sharedCompany = currentUser.RoleAssignments
+            .Any(cr => targetUser.RoleAssignments.Any(tr => tr.CompanyId == cr.CompanyId));
         if (!sharedCompany) return Unauthorized("No shared company membership");
 
         return Ok();
@@ -66,12 +72,24 @@ public class UserGateway : IUserGateway
 
     public async Task<GatewayResponse> CanSearchUsersAsync(string companyId)
     {
-        return await RequireCompanyRole(companyId, CompanyRole.Admin);
+        if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
+            return Unauthorized();
+
+        if (!await _permissionService.HasPermissionAsync(_appUser.UserId, companyId, Permissions.MembersView))
+            return Unauthorized("Insufficient permissions");
+
+        return Ok();
     }
 
     public async Task<GatewayResponse> CanInviteUserAsync(string companyId)
     {
-        return await RequireCompanyRole(companyId, CompanyRole.Admin);
+        if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
+            return Unauthorized();
+
+        if (!await _permissionService.HasPermissionAsync(_appUser.UserId, companyId, Permissions.MembersInvite))
+            return Unauthorized("Insufficient permissions");
+
+        return Ok();
     }
 
     private async Task<GatewayResponse> CanEditUser(string userId)
@@ -79,43 +97,26 @@ public class UserGateway : IUserGateway
         if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
             return Unauthorized();
 
-        var currentUser = await GetCurrentUser();
+        var currentUser = await _userRepository.GetByFirebaseUserIdAsync(_appUser.UserId);
         if (currentUser == null) return Unauthorized("User not found");
 
+        // Users can always edit themselves
         if (currentUser.Id == userId) return Ok();
 
         var targetUser = await _userRepository.GetAsync(userId);
         if (targetUser == null) return NotFound("User not found");
 
-        var isAdminOfSharedCompany = currentUser.CompanyMemberships
-            .Where(cm => (int)cm.Role <= (int)CompanyRole.Admin)
-            .Any(cm => targetUser.CompanyMemberships.Any(tm => tm.CompanyId == cm.CompanyId));
+        // Check if the current user has MembersEdit permission in any shared company
+        foreach (var ra in currentUser.RoleAssignments)
+        {
+            if (targetUser.RoleAssignments.Any(tr => tr.CompanyId == ra.CompanyId))
+            {
+                if (await _permissionService.HasPermissionAsync(_appUser.UserId, ra.CompanyId, Permissions.MembersEdit))
+                    return Ok();
+            }
+        }
 
-        if (!isAdminOfSharedCompany) return Unauthorized("Requires Company Admin role");
-
-        return Ok();
-    }
-
-    private async Task<GatewayResponse> RequireCompanyRole(string companyId, CompanyRole minimumRole)
-    {
-        if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
-            return Unauthorized();
-
-        var user = await GetCurrentUser();
-        if (user == null) return Unauthorized("User not found");
-
-        var membership = user.CompanyMemberships.FirstOrDefault(m => m.CompanyId == companyId);
-        if (membership == null) return Unauthorized("You are not a member of this company");
-
-        if ((int)membership.Role > (int)minimumRole)
-            return Unauthorized($"Requires {minimumRole} role or higher");
-
-        return Ok();
-    }
-
-    private async Task<Models.Entities.User?> GetCurrentUser()
-    {
-        return await _userRepository.GetByFirebaseUserIdAsync(_appUser.UserId!);
+        return Unauthorized("Insufficient permissions");
     }
 
     private static GatewayResponse Ok() => new() { ResponseStatus = GatewayResponseCodes.Ok };

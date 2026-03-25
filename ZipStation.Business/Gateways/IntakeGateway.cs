@@ -1,6 +1,6 @@
 using ZipStation.Business.Helpers;
-using ZipStation.Business.Repositories;
-using ZipStation.Models.Enums;
+using ZipStation.Business.Services;
+using ZipStation.Models.Constants;
 using ZipStation.Models.Responses;
 
 namespace ZipStation.Business.Gateways;
@@ -16,44 +16,54 @@ public interface IIntakeGateway
 public class IntakeGateway : IIntakeGateway
 {
     private readonly IAppUser _appUser;
-    private readonly IUserRepository _userRepository;
+    private readonly IPermissionService _permissionService;
 
-    public IntakeGateway(IAppUser appUser, IUserRepository userRepository)
+    public IntakeGateway(IAppUser appUser, IPermissionService permissionService)
     {
         _appUser = appUser;
-        _userRepository = userRepository;
+        _permissionService = permissionService;
     }
 
     public async Task<GatewayResponse> CanListIntakeAsync(string companyId)
     {
-        return await RequireCompanyMember(companyId);
+        if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
+            return Unauthorized();
+
+        if (!await _permissionService.HasPermissionAsync(_appUser.UserId, companyId, Permissions.IntakeView))
+            return Unauthorized("Insufficient permissions");
+
+        return Ok();
     }
 
     public async Task<GatewayResponse> CanGetIntakeAsync(string companyId)
     {
-        return await RequireCompanyMember(companyId);
+        if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
+            return Unauthorized();
+
+        if (!await _permissionService.HasPermissionAsync(_appUser.UserId, companyId, Permissions.IntakeView))
+            return Unauthorized("Insufficient permissions");
+
+        return Ok();
     }
 
     public async Task<GatewayResponse> CanApproveIntakeAsync(string companyId)
     {
-        return await RequireCompanyMember(companyId);
+        if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
+            return Unauthorized();
+
+        if (!await _permissionService.HasPermissionAsync(_appUser.UserId, companyId, Permissions.IntakeApprove))
+            return Unauthorized("Insufficient permissions");
+
+        return Ok();
     }
 
     public async Task<GatewayResponse> CanDenyIntakeAsync(string companyId)
     {
-        return await RequireCompanyMember(companyId);
-    }
-
-    private async Task<GatewayResponse> RequireCompanyMember(string companyId)
-    {
         if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
             return Unauthorized();
 
-        var user = await _userRepository.GetByFirebaseUserIdAsync(_appUser.UserId);
-        if (user == null) return Unauthorized("User not found");
-
-        if (!user.CompanyMemberships.Any(m => m.CompanyId == companyId))
-            return Unauthorized("You are not a member of this company");
+        if (!await _permissionService.HasPermissionAsync(_appUser.UserId, companyId, Permissions.IntakeDeny))
+            return Unauthorized("Insufficient permissions");
 
         return Ok();
     }

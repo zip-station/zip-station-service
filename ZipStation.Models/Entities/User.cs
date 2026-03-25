@@ -1,6 +1,5 @@
 using MongoDB.Bson.Serialization.Attributes;
 using ZipStation.Models.Attributes;
-using ZipStation.Models.Enums;
 
 namespace ZipStation.Models.Entities;
 
@@ -17,9 +16,11 @@ public class User : BaseEntity
     [BsonIgnoreIfNull]
     public string? AvatarUrl { get; set; }
 
-    public List<CompanyMembership> CompanyMemberships { get; set; } = new();
-
-    public List<ProjectMembership> ProjectMemberships { get; set; } = new();
+    /// <summary>
+    /// Role assignments — each entry assigns a role either company-wide (projectId=null)
+    /// or to a specific project.
+    /// </summary>
+    public List<RoleAssignment> RoleAssignments { get; set; } = new();
 
     [BsonIgnoreIfNull]
     public string? EmailSignatureHtml { get; set; }
@@ -34,21 +35,25 @@ public class User : BaseEntity
     public long InviteCodeExpiresOn { get; set; }
 }
 
+public class RoleAssignment
+{
+    public string CompanyId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The role ID from the roles collection.
+    /// </summary>
+    public string RoleId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// If null, this is a company-wide assignment (applies to all projects).
+    /// If set, this role only applies to the specified project.
+    /// </summary>
+    [BsonIgnoreIfNull]
+    public string? ProjectId { get; set; }
+}
+
 public class UserPreferences
 {
     public string? PreferredLanguage { get; set; }
     public string? Timezone { get; set; }
-}
-
-public class CompanyMembership
-{
-    public string CompanyId { get; set; } = string.Empty;
-    public CompanyRole Role { get; set; }
-}
-
-public class ProjectMembership
-{
-    public string CompanyId { get; set; } = string.Empty;
-    public string ProjectId { get; set; } = string.Empty;
-    public ProjectRole Role { get; set; }
 }
