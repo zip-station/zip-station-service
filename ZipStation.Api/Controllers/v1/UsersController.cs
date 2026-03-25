@@ -2,6 +2,9 @@ using Asp.Versioning;
 using AutoMapper;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using MailKit.Net.Smtp;
+using MailKit.Security;
+using MimeKit;
 using ZipStation.Business.Gateways;
 using ZipStation.Business.Helpers;
 using ZipStation.Business.Repositories;
@@ -20,6 +23,7 @@ public class UsersController : BaseController
 {
     private readonly ILogger<UsersController> _logger;
     private readonly IUserRepository _userRepository;
+    private readonly ICompanyRepository _companyRepository;
     private readonly IMapper _mapper;
     private readonly IAppUser _appUser;
     private readonly IUserGateway _userGateway;
@@ -27,12 +31,14 @@ public class UsersController : BaseController
     public UsersController(
         ILogger<UsersController> logger,
         IUserRepository userRepository,
+        ICompanyRepository companyRepository,
         IMapper mapper,
         IAppUser appUser,
         IUserGateway userGateway)
     {
         _logger = logger;
         _userRepository = userRepository;
+        _companyRepository = companyRepository;
         _mapper = mapper;
         _appUser = appUser;
         _userGateway = userGateway;
@@ -336,6 +342,14 @@ public class UsersController : BaseController
             var created = await _userRepository.CreateAsync(user);
 
             _logger.LogInformation("User invited: {Email} to company {CompanyId}", request.Email, companyId);
+
+            // Send invite email in background if company SMTP is configured
+            _ = Task.Run(async () =>
+            {
+                try { await SendInviteEmailAsync(companyId, request.Email, request.DisplayName); }
+                catch (Exception ex) { _logger.LogError(ex, "Failed to send invite email to {Email}", request.Email); }
+            });
+
             return Ok(_mapper.Map<UserResponse>(created));
         }
         catch (Exception ex)
@@ -343,6 +357,62 @@ public class UsersController : BaseController
             _logger.LogError(ex, "Error inviting user to company {CompanyId}", companyId);
             return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
         }
+    }
+
+    [HttpPost("{id}/resend-invite")]
+    [MapToApiVersion("1.0")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> ResendInvite(string companyId, string id)
+    {
+        try
+        {
+            var user = await _userRepository.GetAsync(id);
+            if (user == null) return NotFound();
+            if (!string.IsNullOrEmpty(user.FirebaseUserId))
+                return BadRequest(new BadRequestResponse { Message = "User has already signed up" });
+
+            await SendInviteEmailAsync(companyId, user.Email, user.DisplayName);
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error resending invite to user {UserId}", id);
+            return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
+        }
+    }
+
+    private async Task SendInviteEmailAsync(string companyId, string toEmail, string? toName)
+    {
+        var company = await _companyRepository.GetAsync(companyId);
+        var smtp = company?.Settings?.Smtp;
+        if (smtp == null || string.IsNullOrEmpty(smtp.Host)) return;
+
+        var fromEmail = smtp.FromEmail ?? smtp.Username;
+        var fromName = smtp.FromName ?? company!.Name;
+
+        var mimeMessage = new MimeMessage();
+        mimeMessage.From.Add(new MailboxAddress(fromName, fromEmail));
+        mimeMessage.To.Add(new MailboxAddress(toName ?? toEmail, toEmail));
+        mimeMessage.Subject = $"You've been invited to {company.Name} on Zip Station";
+
+        var body = $"<p>Hi {toName ?? toEmail.Split('@')[0]},</p>" +
+                   $"<p>You've been invited to join <strong>{company.Name}</strong> on Zip Station.</p>" +
+                   $"<p>Sign up or log in to get started.</p>" +
+                   $"<p>— {company.Name} Team</p>";
+
+        var bodyBuilder = new BodyBuilder { HtmlBody = body, TextBody = $"Hi {toName ?? toEmail.Split('@')[0]},\n\nYou've been invited to join {company.Name} on Zip Station.\n\nSign up or log in to get started.\n\n— {company.Name} Team" };
+        mimeMessage.Body = bodyBuilder.ToMessageBody();
+
+        var password = EncryptionHelper.Decrypt(smtp.Password);
+        using var client = new SmtpClient();
+        client.ServerCertificateValidationCallback = (s, c, h, e) => true;
+        var secureSocketOptions = smtp.UseSsl ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTlsWhenAvailable;
+        await client.ConnectAsync(smtp.Host, smtp.Port, secureSocketOptions);
+        await client.AuthenticateAsync(smtp.Username, password);
+        await client.SendAsync(mimeMessage);
+        await client.DisconnectAsync(true);
+
+        _logger.LogInformation("Invite email sent to {Email} for company {CompanyId}", toEmail, companyId);
     }
     [HttpDelete("{id}")]
     [MapToApiVersion("1.0")]

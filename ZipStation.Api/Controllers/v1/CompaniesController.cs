@@ -195,6 +195,69 @@ public class CompaniesController : BaseController
         }
     }
 
+    [HttpPatch("{id}/settings")]
+    [MapToApiVersion("1.0")]
+    [ProducesResponseType(typeof(CompanyResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> UpdateCompanySettings(string id, [FromBody] UpdateCompanySettingsCommandModel request)
+    {
+        try
+        {
+            var gatewayResponse = await _companyGateway.CanUpdateCompanyAsync(id);
+            if (gatewayResponse.ResponseStatus != GatewayResponseCodes.Ok)
+                return ProcessGatewayResponse(gatewayResponse);
+
+            var company = await _companyRepository.GetAsync(id);
+            if (company == null) return NotFound();
+
+            company.Settings ??= new CompanySettings();
+
+            if (request.DefaultTimezone != null)
+                company.Settings.DefaultTimezone = request.DefaultTimezone;
+            if (request.DefaultLanguage != null)
+                company.Settings.DefaultLanguage = request.DefaultLanguage;
+
+            if (request.Smtp != null)
+            {
+                company.Settings.Smtp ??= new SmtpSettings();
+                company.Settings.Smtp.Host = request.Smtp.Host;
+                company.Settings.Smtp.Port = request.Smtp.Port;
+                company.Settings.Smtp.Username = request.Smtp.Username;
+                company.Settings.Smtp.UseSsl = request.Smtp.UseSsl;
+                company.Settings.Smtp.FromName = request.Smtp.FromName;
+                company.Settings.Smtp.FromEmail = request.Smtp.FromEmail;
+                if (!string.IsNullOrEmpty(request.Smtp.Password))
+                    company.Settings.Smtp.Password = EncryptionHelper.Encrypt(request.Smtp.Password);
+            }
+
+            var updated = await _companyRepository.UpdateAsync(company);
+            _logger.LogInformation("Company settings updated: {CompanyId}", id);
+            return Ok(_mapper.Map<CompanyResponse>(updated));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error updating company settings {CompanyId}", id);
+            return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
+        }
+    }
+
+    [HttpPost("{id}/test-smtp")]
+    [MapToApiVersion("1.0")]
+    public async Task<IActionResult> TestSmtp(string id, [FromBody] TestConnectionRequest request,
+        [FromServices] Business.Services.IConnectionTestService connectionTest)
+    {
+        var company = await _companyRepository.GetAsync(id);
+        if (company == null) return NotFound();
+
+        var password = !string.IsNullOrEmpty(request.Password)
+            ? request.Password
+            : EncryptionHelper.Decrypt(company.Settings?.Smtp?.Password ?? "");
+
+        var (success, message) = await connectionTest.TestSmtpAsync(
+            request.Host, request.Port, request.Username, password, request.UseSsl);
+
+        return Ok(new { success, message });
+    }
+
     [HttpDelete("{id}")]
     [MapToApiVersion("1.0")]
     [ProducesResponseType(StatusCodes.Status200OK)]
