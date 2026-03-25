@@ -8,6 +8,7 @@ using MimeKit;
 using ZipStation.Business.Gateways;
 using ZipStation.Business.Helpers;
 using ZipStation.Business.Repositories;
+using ZipStation.Business.Services;
 using ZipStation.Models.CommandModels;
 using ZipStation.Models.Entities;
 
@@ -27,6 +28,8 @@ public class UsersController : BaseController
     private readonly IMapper _mapper;
     private readonly IAppUser _appUser;
     private readonly IUserGateway _userGateway;
+    private readonly IPermissionService _permissionService;
+    private readonly IRoleRepository _roleRepository;
 
     public UsersController(
         ILogger<UsersController> logger,
@@ -34,7 +37,9 @@ public class UsersController : BaseController
         ICompanyRepository companyRepository,
         IMapper mapper,
         IAppUser appUser,
-        IUserGateway userGateway)
+        IUserGateway userGateway,
+        IPermissionService permissionService,
+        IRoleRepository roleRepository)
     {
         _logger = logger;
         _userRepository = userRepository;
@@ -42,6 +47,8 @@ public class UsersController : BaseController
         _mapper = mapper;
         _appUser = appUser;
         _userGateway = userGateway;
+        _permissionService = permissionService;
+        _roleRepository = roleRepository;
     }
 
     [HttpPost]
@@ -225,7 +232,7 @@ public class UsersController : BaseController
     [HttpPatch("me/preferences")]
     [MapToApiVersion("1.0")]
     [ProducesResponseType(typeof(UserResponse), StatusCodes.Status200OK)]
-    public async Task<IActionResult> UpdatePreferences([FromBody] UpdateUserPreferencesRequest request)
+    public async Task<IActionResult> UpdatePreferences([FromBody] UpdateUserPreferencesCommandModel request)
     {
         try
         {
@@ -304,7 +311,7 @@ public class UsersController : BaseController
     [MapToApiVersion("1.0")]
     [ProducesResponseType(typeof(UserResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(BadRequestResponse), StatusCodes.Status400BadRequest)]
-    public async Task<IActionResult> InviteUser(string companyId, [FromBody] InviteUserRequest request)
+    public async Task<IActionResult> InviteUser(string companyId, [FromBody] InviteUserCommandModel request)
     {
         try
         {
@@ -668,17 +675,80 @@ public class UsersController : BaseController
             return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
         }
     }
-}
 
-public class UpdateUserPreferencesRequest
-{
-    public string? PreferredLanguage { get; set; }
-    public string? Timezone { get; set; }
-}
+    [HttpPost("{id}/role-assignments")]
+    [MapToApiVersion("1.0")]
+    [ProducesResponseType(typeof(UserResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> AssignRole(string id, [FromQuery] string companyId, [FromBody] AssignRoleCommandModel commandModel)
+    {
+        try
+        {
+            if (!await _permissionService.HasPermissionAsync(_appUser.UserId!, companyId, "Members.Edit"))
+                return StatusCode(403, new BadRequestResponse { Message = "Insufficient permissions" });
 
-public class InviteUserRequest
-{
-    public string Email { get; set; } = string.Empty;
-    public string? DisplayName { get; set; }
-    public List<string>? ProjectIds { get; set; }
+            var user = await _userRepository.GetAsync(id);
+            if (user == null) return NotFound();
+
+            // Verify the role exists
+            if (!string.IsNullOrEmpty(commandModel.RoleId))
+            {
+                var role = await _roleRepository.GetAsync(commandModel.RoleId);
+                if (role == null || role.CompanyId != companyId)
+                    return BadRequest(new BadRequestResponse { Message = "Role not found" });
+            }
+
+            // Check if assignment already exists
+            var exists = user.RoleAssignments.Any(ra =>
+                ra.CompanyId == companyId &&
+                ra.RoleId == commandModel.RoleId &&
+                ra.ProjectId == commandModel.ProjectId);
+            if (exists)
+                return BadRequest(new BadRequestResponse { Message = "Role is already assigned" });
+
+            user.RoleAssignments.Add(new RoleAssignment
+            {
+                CompanyId = companyId,
+                RoleId = commandModel.RoleId,
+                ProjectId = commandModel.ProjectId
+            });
+            var updated = await _userRepository.UpdateAsync(user);
+
+            _logger.LogInformation("Role {RoleId} assigned to user {UserId} in company {CompanyId}", commandModel.RoleId, id, companyId);
+            return Ok(_mapper.Map<UserResponse>(updated));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error assigning role to user {UserId}", id);
+            return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
+        }
+    }
+
+    [HttpDelete("{id}/role-assignments")]
+    [MapToApiVersion("1.0")]
+    [ProducesResponseType(typeof(UserResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> RemoveRoleAssignment(string id, [FromQuery] string companyId, [FromQuery] string roleId, [FromQuery] string? projectId = null)
+    {
+        try
+        {
+            if (!await _permissionService.HasPermissionAsync(_appUser.UserId!, companyId, "Members.Edit"))
+                return StatusCode(403, new BadRequestResponse { Message = "Insufficient permissions" });
+
+            var user = await _userRepository.GetAsync(id);
+            if (user == null) return NotFound();
+
+            user.RoleAssignments.RemoveAll(ra =>
+                ra.CompanyId == companyId &&
+                ra.RoleId == roleId &&
+                ra.ProjectId == projectId);
+            var updated = await _userRepository.UpdateAsync(user);
+
+            _logger.LogInformation("Role {RoleId} removed from user {UserId} in company {CompanyId}", roleId, id, companyId);
+            return Ok(_mapper.Map<UserResponse>(updated));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error removing role assignment from user {UserId}", id);
+            return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
+        }
+    }
 }

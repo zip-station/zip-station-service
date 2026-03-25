@@ -86,9 +86,7 @@ public class ProjectGateway : IProjectGateway
         if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
             return Unauthorized();
 
-        if (!await _permissionService.HasPermissionAsync(_appUser.UserId, companyId, Permissions.ProjectsView))
-            return Unauthorized("Insufficient permissions");
-
+        // Any authenticated company member can list their accessible projects
         return Ok();
     }
 

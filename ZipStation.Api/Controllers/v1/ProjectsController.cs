@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 using ZipStation.Business.Gateways;
 using ZipStation.Business.Helpers;
 using ZipStation.Business.Repositories;
+using ZipStation.Business.Services;
 using ZipStation.Models.CommandModels;
 using ZipStation.Models.Entities;
 using ZipStation.Models.Enums;
@@ -27,6 +28,7 @@ public class ProjectsController : BaseController
     private readonly IAppUser _appUser;
     private readonly IAuditService _auditService;
     private readonly ITicketIdCounterRepository _ticketIdCounterRepository;
+    private readonly IPermissionService _permissionService;
 
     public ProjectsController(
         ILogger<ProjectsController> logger,
@@ -36,7 +38,8 @@ public class ProjectsController : BaseController
         IProjectGateway projectGateway,
         IAppUser appUser,
         IAuditService auditService,
-        ITicketIdCounterRepository ticketIdCounterRepository)
+        ITicketIdCounterRepository ticketIdCounterRepository,
+        IPermissionService permissionService)
     {
         _logger = logger;
         _projectRepository = projectRepository;
@@ -46,6 +49,7 @@ public class ProjectsController : BaseController
         _appUser = appUser;
         _auditService = auditService;
         _ticketIdCounterRepository = ticketIdCounterRepository;
+        _permissionService = permissionService;
     }
 
     [HttpPost]
@@ -117,7 +121,13 @@ public class ProjectsController : BaseController
             if (gatewayResponse.ResponseStatus != GatewayResponseCodes.Ok)
                 return ProcessGatewayResponse(gatewayResponse);
 
-            var projects = await _projectRepository.GetByCompanyIdAsync(companyId);
+            var allProjects = await _projectRepository.GetByCompanyIdAsync(companyId);
+
+            // Filter to only projects the user has access to
+            var accessibleIds = await _permissionService.GetAccessibleProjectIdsAsync(_appUser.UserId!, companyId);
+            var accessibleSet = new HashSet<string>(accessibleIds);
+            var projects = allProjects.Where(p => accessibleSet.Contains(p.Id)).ToList();
+
             return Ok(_mapper.Map<List<ProjectResponse>>(projects));
         }
         catch (Exception ex)

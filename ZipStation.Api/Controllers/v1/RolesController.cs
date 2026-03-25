@@ -199,4 +199,33 @@ public class RolesController : BaseController
     {
         return Ok(Permissions.Groups);
     }
+
+    /// <summary>
+    /// Returns the current user's effective permissions for a company.
+    /// </summary>
+    [HttpGet("/api/v{version:apiVersion}/companies/{companyId}/my-permissions")]
+    [MapToApiVersion("1.0")]
+    [ProducesResponseType(typeof(MyPermissionsResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetMyPermissions(string companyId)
+    {
+        try
+        {
+            if (!_appUser.IsAuthenticated || string.IsNullOrEmpty(_appUser.UserId))
+                return Unauthorized();
+
+            var isOwner = await _permissionService.IsOwnerAsync(_appUser.UserId, companyId);
+            var permissions = await _permissionService.GetEffectivePermissionsAsync(_appUser.UserId, companyId);
+
+            return Ok(new MyPermissionsResponse
+            {
+                IsOwner = isOwner,
+                Permissions = permissions.ToList()
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting permissions for current user");
+            return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
+        }
+    }
 }
