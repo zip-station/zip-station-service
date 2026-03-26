@@ -3,6 +3,7 @@ using ZipStation.Models.Attributes;
 
 namespace ZipStation.Models.Entities;
 
+[BsonIgnoreExtraElements]
 public class User : BaseEntity
 {
     [DoNotChangeOnPatch]
