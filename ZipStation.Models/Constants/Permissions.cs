@@ -15,6 +15,8 @@ public static class Permissions
     public const string IntakeView = "Intake.View";
     public const string IntakeApprove = "Intake.Approve";
     public const string IntakeDeny = "Intake.Deny";
+    public const string IntakeImportHistory = "Intake.ImportHistory";
+    public const string IntakeCheckNow = "Intake.CheckNow";
 
     // Intake Rules
     public const string IntakeRulesView = "IntakeRules.View";
@@ -58,6 +60,9 @@ public static class Permissions
 
     // Reports
     public const string ReportsView = "Reports.View";
+    public const string ReportsCreate = "Reports.Create";
+    public const string ReportsEdit = "Reports.Edit";
+    public const string ReportsDelete = "Reports.Delete";
 
     // Audit Log
     public const string AuditLogView = "AuditLog.View";
@@ -72,7 +77,7 @@ public static class Permissions
     {
         ["Dashboard"] = [DashboardView],
         ["Tickets"] = [TicketsView, TicketsCreate, TicketsEdit, TicketsDelete, TicketsAssign, TicketsMerge, TicketsLink],
-        ["Intake"] = [IntakeView, IntakeApprove, IntakeDeny],
+        ["Intake"] = [IntakeView, IntakeApprove, IntakeDeny, IntakeImportHistory, IntakeCheckNow],
         ["Intake Rules"] = [IntakeRulesView, IntakeRulesCreate, IntakeRulesEdit, IntakeRulesDelete],
         ["Customers"] = [CustomersView, CustomersEdit],
         ["Canned Responses"] = [CannedResponsesView, CannedResponsesCreate, CannedResponsesEdit, CannedResponsesDelete],
@@ -80,7 +85,7 @@ public static class Permissions
         ["Members"] = [MembersView, MembersInvite, MembersRemove, MembersEdit],
         ["Roles"] = [RolesView, RolesCreate, RolesEdit, RolesDelete],
         ["Alerts"] = [AlertsView, AlertsCreate, AlertsEdit, AlertsDelete],
-        ["Reports"] = [ReportsView],
+        ["Reports"] = [ReportsView, ReportsCreate, ReportsEdit, ReportsDelete],
         ["Audit Log"] = [AuditLogView],
     };
 

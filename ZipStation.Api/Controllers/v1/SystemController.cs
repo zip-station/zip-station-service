@@ -6,6 +6,8 @@ using MongoDB.Bson;
 using MongoDB.Driver;
 using ZipStation.Business.Helpers;
 using ZipStation.Business.Repositories;
+using ZipStation.Business.Services;
+using ZipStation.Models.Constants;
 using ZipStation.Models.Entities;
 
 
@@ -22,6 +24,7 @@ public class SystemController : BaseController
     private readonly IAppUser _appUser;
     private readonly IMongoDatabase _database;
     private readonly AppConfig _appConfig;
+    private readonly IPermissionService _permissionService;
 
     public SystemController(
         ILogger<SystemController> logger,
@@ -29,7 +32,8 @@ public class SystemController : BaseController
         ICompanyRepository companyRepository,
         IAppUser appUser,
         IMongoDatabase database,
-        IOptions<AppConfig> appConfig)
+        IOptions<AppConfig> appConfig,
+        IPermissionService permissionService)
     {
         _logger = logger;
         _userRepository = userRepository;
@@ -37,6 +41,7 @@ public class SystemController : BaseController
         _appUser = appUser;
         _database = database;
         _appConfig = appConfig.Value;
+        _permissionService = permissionService;
     }
 
     [HttpGet("status")]
@@ -134,6 +139,10 @@ public class SystemController : BaseController
     [Authorize]
     public async Task<IActionResult> TriggerPoll()
     {
+        var company = await _companyRepository.GetFirstAsync();
+        if (company != null && !await _permissionService.HasPermissionAsync(_appUser.UserId!, company.Id, Permissions.IntakeCheckNow))
+            return StatusCode(403, new { message = "Insufficient permissions" });
+
         var collection = _database.GetCollection<BsonDocument>(_appConfig.ZipStationMongoDb.Collections.WorkerTriggers);
         await collection.InsertOneAsync(new BsonDocument
         {
@@ -147,6 +156,10 @@ public class SystemController : BaseController
     [Authorize]
     public async Task<IActionResult> TriggerHistoryImport()
     {
+        var company = await _companyRepository.GetFirstAsync();
+        if (company != null && !await _permissionService.HasPermissionAsync(_appUser.UserId!, company.Id, Permissions.IntakeImportHistory))
+            return StatusCode(403, new { message = "Insufficient permissions" });
+
         var collection = _database.GetCollection<BsonDocument>(_appConfig.ZipStationMongoDb.Collections.WorkerTriggers);
         await collection.InsertOneAsync(new BsonDocument
         {
