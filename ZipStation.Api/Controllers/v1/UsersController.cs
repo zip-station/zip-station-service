@@ -161,6 +161,20 @@ public class UsersController : BaseController
                 if (ownedCompanies.Any()) response.IsOwner = true;
             }
 
+            // Populate role names
+            var meRoleIds = user.RoleAssignments
+                .Where(ra => !string.IsNullOrEmpty(ra.RoleId))
+                .Select(ra => ra.RoleId).Distinct().ToList();
+            if (meRoleIds.Count > 0)
+            {
+                var meRoles = (await _roleRepository.GetByIdsAsync(meRoleIds)).ToDictionary(r => r.Id, r => r.Name);
+                foreach (var ra in response.RoleAssignments)
+                {
+                    if (!string.IsNullOrEmpty(ra.RoleId) && meRoles.TryGetValue(ra.RoleId, out var rn))
+                        ra.RoleName = rn;
+                }
+            }
+
             return Ok(response);
         }
         catch (Exception ex)
@@ -288,13 +302,26 @@ public class UsersController : BaseController
 
             var responses = _mapper.Map<List<UserResponse>>(users);
 
-            // Set IsOwner flag
+            // Build role name lookup
+            var allRoleIds = users.SelectMany(u => u.RoleAssignments)
+                .Where(ra => !string.IsNullOrEmpty(ra.RoleId))
+                .Select(ra => ra.RoleId).Distinct().ToList();
+            var rolesLookup = allRoleIds.Count > 0
+                ? (await _roleRepository.GetByIdsAsync(allRoleIds)).ToDictionary(r => r.Id, r => r.Name)
+                : new Dictionary<string, string>();
+
+            // Set IsOwner flag and populate role names
             if (company != null)
             {
                 foreach (var r in responses)
                 {
                     var user = users.First(u => u.Id == r.Id);
                     r.IsOwner = user.Id == company.OwnerUserId;
+                    foreach (var ra in r.RoleAssignments)
+                    {
+                        if (!string.IsNullOrEmpty(ra.RoleId) && rolesLookup.TryGetValue(ra.RoleId, out var roleName))
+                            ra.RoleName = roleName;
+                    }
                 }
             }
 
@@ -697,13 +724,23 @@ public class UsersController : BaseController
                     return BadRequest(new BadRequestResponse { Message = "Role not found" });
             }
 
-            // Check if assignment already exists
+            // Check if exact assignment already exists (ignore empty roleId placeholders)
             var exists = user.RoleAssignments.Any(ra =>
                 ra.CompanyId == companyId &&
                 ra.RoleId == commandModel.RoleId &&
+                !string.IsNullOrEmpty(ra.RoleId) &&
                 ra.ProjectId == commandModel.ProjectId);
             if (exists)
                 return BadRequest(new BadRequestResponse { Message = "Role is already assigned" });
+
+            // Remove empty placeholder for this scope if we're adding a real role
+            if (!string.IsNullOrEmpty(commandModel.RoleId))
+            {
+                user.RoleAssignments.RemoveAll(ra =>
+                    ra.CompanyId == companyId &&
+                    string.IsNullOrEmpty(ra.RoleId) &&
+                    ra.ProjectId == commandModel.ProjectId);
+            }
 
             user.RoleAssignments.Add(new RoleAssignment
             {
@@ -726,7 +763,7 @@ public class UsersController : BaseController
     [HttpDelete("{id}/role-assignments")]
     [MapToApiVersion("1.0")]
     [ProducesResponseType(typeof(UserResponse), StatusCodes.Status200OK)]
-    public async Task<IActionResult> RemoveRoleAssignment(string id, [FromQuery] string companyId, [FromQuery] string roleId, [FromQuery] string? projectId = null)
+    public async Task<IActionResult> RemoveRoleAssignment(string id, [FromQuery] string companyId, [FromQuery] string? roleId = null, [FromQuery] string? projectId = null)
     {
         try
         {
@@ -736,10 +773,33 @@ public class UsersController : BaseController
             var user = await _userRepository.GetAsync(id);
             if (user == null) return NotFound();
 
-            user.RoleAssignments.RemoveAll(ra =>
-                ra.CompanyId == companyId &&
-                ra.RoleId == roleId &&
-                ra.ProjectId == projectId);
+            // If roleId is empty/null, remove ALL assignments for this project (full project removal)
+            // Otherwise, remove the specific role assignment
+            if (string.IsNullOrEmpty(roleId))
+            {
+                user.RoleAssignments.RemoveAll(ra =>
+                    ra.CompanyId == companyId &&
+                    ra.ProjectId == projectId);
+            }
+            else
+            {
+                user.RoleAssignments.RemoveAll(ra =>
+                    ra.CompanyId == companyId &&
+                    ra.RoleId == roleId &&
+                    ra.ProjectId == projectId);
+
+                // If removing a specific role from a project and no other assignments remain for that project,
+                // re-add an empty placeholder so the user stays assigned to the project
+                if (projectId != null && !user.RoleAssignments.Any(ra => ra.CompanyId == companyId && ra.ProjectId == projectId))
+                {
+                    user.RoleAssignments.Add(new RoleAssignment
+                    {
+                        CompanyId = companyId,
+                        RoleId = string.Empty,
+                        ProjectId = projectId
+                    });
+                }
+            }
             var updated = await _userRepository.UpdateAsync(user);
 
             _logger.LogInformation("Role {RoleId} removed from user {UserId} in company {CompanyId}", roleId, id, companyId);

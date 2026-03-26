@@ -14,8 +14,15 @@ public interface IPermissionService
 
     /// <summary>
     /// Get all effective permissions for a user in a company (optionally scoped to a project).
+    /// When projectId is null, only returns company-wide permissions.
     /// </summary>
     Task<HashSet<string>> GetEffectivePermissionsAsync(string userId, string companyId, string? projectId = null);
+
+    /// <summary>
+    /// Get all effective permissions across ALL role assignments (company-wide + all projects).
+    /// Used for UI gating where we need to know everything the user can do.
+    /// </summary>
+    Task<HashSet<string>> GetAllPermissionsAsync(string userId, string companyId);
 
     /// <summary>
     /// Check if the user is the company owner.
@@ -48,6 +55,33 @@ public class PermissionService : IPermissionService
         _projectRepository = projectRepository;
     }
 
+    public async Task<HashSet<string>> GetAllPermissionsAsync(string userId, string companyId)
+    {
+        var user = await _userRepository.GetByFirebaseUserIdAsync(userId);
+        if (user == null) return new HashSet<string>();
+
+        var company = await _companyRepository.GetAsync(companyId);
+        if (company != null && company.OwnerUserId == user.Id)
+            return new HashSet<string>(Permissions.All);
+
+        // Collect ALL role IDs from any assignment in this company (company-wide + all projects)
+        var allRoleIds = user.RoleAssignments
+            .Where(ra => ra.CompanyId == companyId && !string.IsNullOrEmpty(ra.RoleId))
+            .Select(ra => ra.RoleId)
+            .Distinct()
+            .ToList();
+
+        if (allRoleIds.Count == 0) return new HashSet<string>();
+
+        var roles = await _roleRepository.GetByIdsAsync(allRoleIds);
+        var permissions = new HashSet<string>();
+        foreach (var role in roles)
+            foreach (var perm in role.Permissions)
+                permissions.Add(perm);
+
+        return permissions;
+    }
+
     public async Task<bool> IsOwnerAsync(string userId, string companyId)
     {
         var company = await _companyRepository.GetAsync(companyId);
@@ -75,9 +109,10 @@ public class PermissionService : IPermissionService
         if (company != null && company.OwnerUserId == user.Id)
             return new HashSet<string>(Permissions.All);
 
-        // Collect role IDs from matching assignments
+        // Collect role IDs from matching assignments (ignore empty roleId placeholders)
         var matchingRoleIds = user.RoleAssignments
             .Where(ra => ra.CompanyId == companyId &&
+                         !string.IsNullOrEmpty(ra.RoleId) &&
                          (ra.ProjectId == null || ra.ProjectId == projectId)) // company-wide + project-specific
             .Select(ra => ra.RoleId)
             .Distinct()
@@ -110,15 +145,16 @@ public class PermissionService : IPermissionService
             return allProjects.Select(p => p.Id).ToList();
         }
 
-        // Company-wide assignments → all projects
-        var hasCompanyWide = user.RoleAssignments.Any(ra => ra.CompanyId == companyId && ra.ProjectId == null);
-        if (hasCompanyWide)
+        // Company-wide assignments with a real role → all projects
+        var hasCompanyWideRole = user.RoleAssignments.Any(ra =>
+            ra.CompanyId == companyId && ra.ProjectId == null && !string.IsNullOrEmpty(ra.RoleId));
+        if (hasCompanyWideRole)
         {
             var allProjects = await _projectRepository.GetByCompanyIdAsync(companyId);
             return allProjects.Select(p => p.Id).ToList();
         }
 
-        // Project-specific assignments
+        // Project-specific assignments (with or without roleId — being assigned to a project = access)
         return user.RoleAssignments
             .Where(ra => ra.CompanyId == companyId && ra.ProjectId != null)
             .Select(ra => ra.ProjectId!)

@@ -29,6 +29,8 @@ public class ProjectsController : BaseController
     private readonly IAuditService _auditService;
     private readonly ITicketIdCounterRepository _ticketIdCounterRepository;
     private readonly IPermissionService _permissionService;
+    private readonly ICompanyRepository _companyRepository;
+    private readonly IRoleRepository _roleRepository;
 
     public ProjectsController(
         ILogger<ProjectsController> logger,
@@ -39,7 +41,9 @@ public class ProjectsController : BaseController
         IAppUser appUser,
         IAuditService auditService,
         ITicketIdCounterRepository ticketIdCounterRepository,
-        IPermissionService permissionService)
+        IPermissionService permissionService,
+        ICompanyRepository companyRepository,
+        IRoleRepository roleRepository)
     {
         _logger = logger;
         _projectRepository = projectRepository;
@@ -50,6 +54,8 @@ public class ProjectsController : BaseController
         _auditService = auditService;
         _ticketIdCounterRepository = ticketIdCounterRepository;
         _permissionService = permissionService;
+        _companyRepository = companyRepository;
+        _roleRepository = roleRepository;
     }
 
     [HttpPost]
@@ -421,17 +427,47 @@ public class ProjectsController : BaseController
             if (gatewayResponse.ResponseStatus != GatewayResponseCodes.Ok)
                 return ProcessGatewayResponse(gatewayResponse);
 
+            var companyEntity = await _companyRepository.GetAsync(companyId);
             var companyUsers = await _userRepository.GetByCompanyIdAsync(companyId);
-            var members = companyUsers
-                .Where(u => u.RoleAssignments.Any(ra => ra.ProjectId == id || (ra.CompanyId == companyId && ra.ProjectId == null)))
-                .Select(u => new ProjectMemberResponse
+            var filteredUsers = companyUsers
+                .Where(u =>
+                    (companyEntity != null && companyEntity.OwnerUserId == u.Id) ||
+                    u.RoleAssignments.Any(ra => ra.CompanyId == companyId && ra.ProjectId == id) ||
+                    u.RoleAssignments.Any(ra => ra.CompanyId == companyId && ra.ProjectId == null && !string.IsNullOrEmpty(ra.RoleId)))
+                .ToList();
+
+            // Build role name lookup
+            var allRoleIds = filteredUsers.SelectMany(u => u.RoleAssignments)
+                .Where(ra => !string.IsNullOrEmpty(ra.RoleId))
+                .Select(ra => ra.RoleId).Distinct().ToList();
+            var rolesLookup = allRoleIds.Count > 0
+                ? (await _roleRepository.GetByIdsAsync(allRoleIds)).ToDictionary(r => r.Id, r => r.Name)
+                : new Dictionary<string, string>();
+
+            var members = filteredUsers.Select(u =>
+            {
+                // Get roles relevant to this project: project-specific + company-wide
+                var userRoles = u.RoleAssignments
+                    .Where(ra => ra.CompanyId == companyId && !string.IsNullOrEmpty(ra.RoleId) &&
+                                 (ra.ProjectId == id || ra.ProjectId == null))
+                    .Select(ra => new ProjectMemberRoleResponse
+                    {
+                        RoleId = ra.RoleId,
+                        RoleName = rolesLookup.TryGetValue(ra.RoleId, out var name) ? name : "Unknown",
+                        IsCompanyWide = ra.ProjectId == null
+                    })
+                    .ToList();
+
+                return new ProjectMemberResponse
                 {
                     UserId = u.Id,
                     Email = u.Email,
                     DisplayName = u.DisplayName,
-                    AvatarUrl = u.AvatarUrl
-                })
-                .ToList();
+                    AvatarUrl = u.AvatarUrl,
+                    IsOwner = companyEntity != null && companyEntity.OwnerUserId == u.Id,
+                    Roles = userRoles
+                };
+            }).ToList();
 
             return Ok(members);
         }
@@ -612,4 +648,13 @@ public class ProjectMemberResponse
     public string Email { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public string? AvatarUrl { get; set; }
+    public bool IsOwner { get; set; }
+    public List<ProjectMemberRoleResponse> Roles { get; set; } = new();
+}
+
+public class ProjectMemberRoleResponse
+{
+    public string RoleId { get; set; } = string.Empty;
+    public string RoleName { get; set; } = string.Empty;
+    public bool IsCompanyWide { get; set; }
 }

@@ -214,7 +214,7 @@ public class RolesController : BaseController
                 return Unauthorized();
 
             var isOwner = await _permissionService.IsOwnerAsync(_appUser.UserId, companyId);
-            var permissions = await _permissionService.GetEffectivePermissionsAsync(_appUser.UserId, companyId);
+            var permissions = await _permissionService.GetAllPermissionsAsync(_appUser.UserId, companyId);
 
             return Ok(new MyPermissionsResponse
             {
