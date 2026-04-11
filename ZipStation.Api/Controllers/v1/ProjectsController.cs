@@ -367,6 +367,26 @@ public class ProjectsController : BaseController
             if (request.StaleTicketDays.HasValue)
                 project.Settings.StaleTicketDays = Math.Max(1, request.StaleTicketDays.Value);
 
+            if (request.FileStorage != null)
+            {
+                var existingAppKey = project.Settings.FileStorage?.AppKey ?? "";
+                var appKey = !string.IsNullOrEmpty(request.FileStorage.AppKey)
+                    ? EncryptionHelper.Encrypt(request.FileStorage.AppKey)
+                    : existingAppKey;
+                var existingKeyId = project.Settings.FileStorage?.KeyId ?? "";
+                var keyId = !string.IsNullOrEmpty(request.FileStorage.KeyId)
+                    ? EncryptionHelper.Encrypt(request.FileStorage.KeyId)
+                    : existingKeyId;
+                project.Settings.FileStorage = new FileStorageSettings
+                {
+                    KeyId = keyId,
+                    AppKey = appKey,
+                    BucketName = request.FileStorage.BucketName,
+                    Endpoint = request.FileStorage.Endpoint,
+                    Region = request.FileStorage.Region
+                };
+            }
+
             var updated = await _projectRepository.UpdateAsync(project);
 
             _logger.LogInformation("Project settings updated: {ProjectId}", id);
@@ -564,6 +584,7 @@ public class UpdateProjectSettingsRequest
     public UpdateAutoReplyRequest? AutoReply { get; set; }
     public UpdateSpamSettingsRequest? Spam { get; set; }
     public int? StaleTicketDays { get; set; }
+    public UpdateFileStorageSettingsRequest? FileStorage { get; set; }
 }
 
 public class UpdateSmtpSettingsRequest
@@ -626,6 +647,15 @@ public class UpdateAutoReplyRequest
     public bool Enabled { get; set; }
     public string SubjectTemplate { get; set; } = "Re: {TicketSubject}";
     public string BodyTemplate { get; set; } = string.Empty;
+}
+
+public class UpdateFileStorageSettingsRequest
+{
+    public string KeyId { get; set; } = string.Empty;
+    public string AppKey { get; set; } = string.Empty;
+    public string BucketName { get; set; } = string.Empty;
+    public string Endpoint { get; set; } = string.Empty;
+    public string Region { get; set; } = string.Empty;
 }
 
 public class TestConnectionRequest

@@ -18,4 +18,13 @@ public class TicketMessageResponse
     public long SentOnDateTime { get; set; }
     public long CreatedOnDateTime { get; set; }
     public long UpdatedOnDateTime { get; set; }
+    public List<MessageAttachmentResponse>? Attachments { get; set; }
+}
+
+public class MessageAttachmentResponse
+{
+    public string Id { get; set; } = string.Empty;
+    public string FileName { get; set; } = string.Empty;
+    public string ContentType { get; set; } = string.Empty;
+    public long SizeBytes { get; set; }
 }

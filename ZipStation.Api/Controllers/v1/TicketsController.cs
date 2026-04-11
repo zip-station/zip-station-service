@@ -34,6 +34,7 @@ public class TicketsController : BaseController
     private readonly IEmailService _emailService;
     private readonly IAuditService _auditService;
     private readonly IAlertService _alertService;
+    private readonly IFileStorageService _fileStorageService;
     private readonly IMongoDatabase _database;
 
     public TicketsController(
@@ -50,6 +51,7 @@ public class TicketsController : BaseController
         IEmailService emailService,
         IAuditService auditService,
         IAlertService alertService,
+        IFileStorageService fileStorageService,
         IMongoDatabase database)
     {
         _logger = logger;
@@ -65,6 +67,7 @@ public class TicketsController : BaseController
         _emailService = emailService;
         _auditService = auditService;
         _alertService = alertService;
+        _fileStorageService = fileStorageService;
         _database = database;
     }
 
@@ -326,41 +329,11 @@ public class TicketsController : BaseController
 
             var created = await _ticketMessageRepository.CreateAsync(message);
 
-            // Send email asynchronously (don't block the response)
-            if (created.SendStatus == MessageSendStatus.Pending)
+            // Send email asynchronously — but only if no attachments are being uploaded
+            // If HasPendingAttachments, the frontend will call POST /messages/{id}/send after uploads finish
+            if (created.SendStatus == MessageSendStatus.Pending && !commandModel.HasPendingAttachments)
             {
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        var project = await _projectRepository.GetAsync(ticket.ProjectId);
-                        if (project != null)
-                        {
-                            // Find the last customer message to quote in the reply
-                            var ticketMessages = await _ticketMessageRepository.GetByTicketIdAsync(id);
-                            var lastCustomerMsg = ticketMessages
-                                .Where(m => m.Source == MessageSource.Customer && m.Id != created.Id)
-                                .OrderByDescending(m => m.CreatedOnDateTime)
-                                .FirstOrDefault();
-
-                            var (success, error) = await _emailService.SendReplyAsync(
-                                project, ticket, created, ticket.CustomerEmail!, ticket.CustomerName, lastCustomerMsg);
-
-                            created.SendStatus = success ? MessageSendStatus.Sent : MessageSendStatus.Failed;
-                            created.SendError = error;
-                            created.SentOnDateTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                            created.MessageId = $"{created.Id}@zipstation";
-                            await _ticketMessageRepository.UpdateAsync(created);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Background email send failed for message {MessageId}", created.Id);
-                        created.SendStatus = MessageSendStatus.Failed;
-                        created.SendError = ex.Message;
-                        await _ticketMessageRepository.UpdateAsync(created);
-                    }
-                });
+                _ = Task.Run(async () => await SendMessageEmailAsync(ticket, created));
             }
 
             // If not an internal note, update ticket status to Pending (awaiting customer reply)
@@ -399,22 +372,181 @@ public class TicketsController : BaseController
             if (message.SendStatus != MessageSendStatus.Failed)
                 return BadRequest(new BadRequestResponse { Message = "Only failed messages can be retried" });
 
-            var project = await _projectRepository.GetAsync(ticket.ProjectId);
-            if (project == null) return BadRequest(new BadRequestResponse { Message = "Project not found" });
-
-            var (success, error) = await _emailService.SendReplyAsync(
-                project, ticket, message, ticket.CustomerEmail!, ticket.CustomerName);
-
-            message.SendStatus = success ? MessageSendStatus.Sent : MessageSendStatus.Failed;
-            message.SendError = error;
-            message.SentOnDateTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            message.SendStatus = MessageSendStatus.Pending;
             await _ticketMessageRepository.UpdateAsync(message);
+
+            _ = Task.Run(async () => await SendMessageEmailAsync(ticket, message));
 
             return Ok(_mapper.Map<TicketMessageResponse>(message));
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error retrying message {MessageId}", messageId);
+            return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
+        }
+    }
+
+    private async Task SendMessageEmailAsync(Ticket ticket, TicketMessage message)
+    {
+        try
+        {
+            var project = await _projectRepository.GetAsync(ticket.ProjectId);
+            if (project != null)
+            {
+                var ticketMessages = await _ticketMessageRepository.GetByTicketIdAsync(ticket.Id);
+                var lastCustomerMsg = ticketMessages
+                    .Where(m => m.Source == MessageSource.Customer && m.Id != message.Id)
+                    .OrderByDescending(m => m.CreatedOnDateTime)
+                    .FirstOrDefault();
+
+                // Re-read the message to get any attachments added after creation
+                var freshMessage = ticketMessages.FirstOrDefault(m => m.Id == message.Id) ?? message;
+
+                List<(string FileName, string ContentType, Stream Content)>? attachmentStreams = null;
+                if (freshMessage.Attachments?.Count > 0 && project.Settings?.FileStorage != null)
+                {
+                    attachmentStreams = new();
+                    foreach (var att in freshMessage.Attachments)
+                    {
+                        var s = await _fileStorageService.DownloadAsync(project.Settings.FileStorage, att.StorageKey);
+                        attachmentStreams.Add((att.FileName, att.ContentType, s));
+                    }
+                }
+
+                var (success, error) = await _emailService.SendReplyAsync(
+                    project, ticket, freshMessage, ticket.CustomerEmail!, ticket.CustomerName, lastCustomerMsg, attachmentStreams);
+
+                if (attachmentStreams != null)
+                    foreach (var (_, _, s) in attachmentStreams) s.Dispose();
+
+                freshMessage.SendStatus = success ? MessageSendStatus.Sent : MessageSendStatus.Failed;
+                freshMessage.SendError = error;
+                freshMessage.SentOnDateTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                freshMessage.MessageId = $"{freshMessage.Id}@zipstation";
+                await _ticketMessageRepository.UpdateAsync(freshMessage);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Background email send failed for message {MessageId}", message.Id);
+            message.SendStatus = MessageSendStatus.Failed;
+            message.SendError = ex.Message;
+            await _ticketMessageRepository.UpdateAsync(message);
+        }
+    }
+
+    private const long MaxAttachmentSize = 10 * 1024 * 1024; // 10MB
+
+    [HttpPost("{id}/messages/{messageId}/attachments")]
+    [MapToApiVersion("1.0")]
+    [ProducesResponseType(typeof(TicketMessageResponse), StatusCodes.Status200OK)]
+    [RequestSizeLimit(MaxAttachmentSize + 1024)] // allow overhead for multipart headers
+    public async Task<IActionResult> UploadAttachment(string companyId, string id, string messageId, IFormFile file)
+    {
+        try
+        {
+            if (file == null || file.Length == 0)
+                return BadRequest(new BadRequestResponse { Message = "No file provided" });
+            if (file.Length > MaxAttachmentSize)
+                return BadRequest(new BadRequestResponse { Message = "File exceeds 10MB limit" });
+
+            var ticket = await _ticketRepository.GetAsync(id);
+            if (ticket == null || ticket.CompanyId != companyId) return NotFound();
+
+            var gatewayResponse = await _ticketGateway.CanAddMessageAsync(companyId, ticket.ProjectId);
+            if (gatewayResponse.ResponseStatus != GatewayResponseCodes.Ok)
+                return ProcessGatewayResponse(gatewayResponse);
+
+            var project = await _projectRepository.GetAsync(ticket.ProjectId);
+            if (project?.Settings?.FileStorage == null || string.IsNullOrEmpty(project.Settings.FileStorage.BucketName))
+                return BadRequest(new BadRequestResponse { Message = "File storage not configured for this project" });
+
+            var messages = await _ticketMessageRepository.GetByTicketIdAsync(id);
+            var message = messages.FirstOrDefault(m => m.Id == messageId);
+            if (message == null) return NotFound();
+
+            var storageKey = $"{companyId}/{ticket.ProjectId}/{id}/{messageId}/{MongoDB.Bson.ObjectId.GenerateNewId()}_{file.FileName}";
+
+            using var stream = file.OpenReadStream();
+            await _fileStorageService.UploadAsync(project.Settings.FileStorage, storageKey, stream, file.ContentType);
+
+            var attachment = new MessageAttachment
+            {
+                FileName = file.FileName,
+                ContentType = file.ContentType,
+                SizeBytes = file.Length,
+                StorageKey = storageKey
+            };
+
+            message.Attachments ??= new List<MessageAttachment>();
+            message.Attachments.Add(attachment);
+            await _ticketMessageRepository.UpdateAsync(message);
+
+            _logger.LogInformation("Attachment {FileName} uploaded to message {MessageId}", file.FileName, messageId);
+            return Ok(_mapper.Map<TicketMessageResponse>(message));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error uploading attachment for message {MessageId}", messageId);
+            return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
+        }
+    }
+
+    [HttpPost("{id}/messages/{messageId}/send")]
+    [MapToApiVersion("1.0")]
+    [ProducesResponseType(typeof(TicketMessageResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> SendMessage(string companyId, string id, string messageId)
+    {
+        try
+        {
+            var ticket = await _ticketRepository.GetAsync(id);
+            if (ticket == null || ticket.CompanyId != companyId) return NotFound();
+
+            var messages = await _ticketMessageRepository.GetByTicketIdAsync(id);
+            var message = messages.FirstOrDefault(m => m.Id == messageId);
+            if (message == null) return NotFound();
+            if (message.SendStatus != MessageSendStatus.Pending)
+                return BadRequest(new BadRequestResponse { Message = "Message is not in pending state" });
+
+            _ = Task.Run(async () => await SendMessageEmailAsync(ticket, message));
+
+            return Ok(_mapper.Map<TicketMessageResponse>(message));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error triggering send for message {MessageId}", messageId);
+            return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
+        }
+    }
+
+    [HttpGet("{id}/messages/{messageId}/attachments/{attachmentId}")]
+    [MapToApiVersion("1.0")]
+    public async Task<IActionResult> DownloadAttachment(string companyId, string id, string messageId, string attachmentId)
+    {
+        try
+        {
+            var ticket = await _ticketRepository.GetAsync(id);
+            if (ticket == null || ticket.CompanyId != companyId) return NotFound();
+
+            var gatewayResponse = await _ticketGateway.CanGetTicketAsync(companyId, ticket.ProjectId);
+            if (gatewayResponse.ResponseStatus != GatewayResponseCodes.Ok)
+                return ProcessGatewayResponse(gatewayResponse);
+
+            var project = await _projectRepository.GetAsync(ticket.ProjectId);
+            if (project?.Settings?.FileStorage == null)
+                return BadRequest(new BadRequestResponse { Message = "File storage not configured" });
+
+            var messages = await _ticketMessageRepository.GetByTicketIdAsync(id);
+            var message = messages.FirstOrDefault(m => m.Id == messageId);
+            var attachment = message?.Attachments?.FirstOrDefault(a => a.Id == attachmentId);
+            if (attachment == null) return NotFound();
+
+            var stream = await _fileStorageService.DownloadAsync(project.Settings.FileStorage, attachment.StorageKey);
+            return File(stream, attachment.ContentType, attachment.FileName);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error downloading attachment {AttachmentId}", attachmentId);
             return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
         }
     }
