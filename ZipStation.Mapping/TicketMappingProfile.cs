@@ -12,5 +12,6 @@ public class TicketMappingProfile : Profile
         CreateMap<TicketCommandModel, Ticket>();
         CreateMap<Ticket, TicketResponse>();
         CreateMap<TicketMessage, TicketMessageResponse>();
+        CreateMap<MessageAttachment, MessageAttachmentResponse>();
     }
 }

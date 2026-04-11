@@ -29,6 +29,7 @@ public class ProjectSettingsResponse
     public AutoReplySettingsResponse? AutoReply { get; set; }
     public SpamSettingsResponse? Spam { get; set; }
     public ContactFormSettingsResponse? ContactForm { get; set; }
+    public FileStorageSettingsResponse? FileStorage { get; set; }
 }
 
 public class EmailSignatureSettingsResponse
@@ -60,6 +61,14 @@ public class ContactFormSettingsResponse
     public string NameLabel { get; set; } = "Name";
     public string MessageLabel { get; set; } = "Message";
     public string? SubjectLabel { get; set; }
+}
+
+public class FileStorageSettingsResponse
+{
+    public string BucketName { get; set; } = string.Empty;
+    public string Endpoint { get; set; } = string.Empty;
+    public string Region { get; set; } = string.Empty;
+    public bool HasCredentials { get; set; }
 }
 
 public class SmtpSettingsResponse

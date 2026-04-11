@@ -21,5 +21,7 @@ public class ProjectMappingProfile : Profile
         CreateMap<EmailSignatureSettings, EmailSignatureSettingsResponse>();
         CreateMap<AutoReplySettings, AutoReplySettingsResponse>();
         CreateMap<SpamSettings, SpamSettingsResponse>();
+        CreateMap<FileStorageSettings, FileStorageSettingsResponse>()
+            .ForMember(d => d.HasCredentials, o => o.MapFrom(s => !string.IsNullOrEmpty(s.AppKey)));
     }
 }

@@ -48,6 +48,8 @@ public class ProjectSettings
     public SpamSettings? Spam { get; set; }
 
     public ContactFormSettings? ContactForm { get; set; }
+
+    public FileStorageSettings? FileStorage { get; set; }
 }
 
 public class EmailSignatureSettings
@@ -90,6 +92,15 @@ public class ContactFormSettings
     public string MessageLabel { get; set; } = "Message";
 
     public string? SubjectLabel { get; set; }
+}
+
+public class FileStorageSettings
+{
+    public string KeyId { get; set; } = string.Empty;
+    public string AppKey { get; set; } = string.Empty;
+    public string BucketName { get; set; } = string.Empty;
+    public string Endpoint { get; set; } = string.Empty;
+    public string Region { get; set; } = string.Empty;
 }
 
 public class SmtpSettings

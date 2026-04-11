@@ -15,7 +15,8 @@ public interface IEmailService
         TicketMessage message,
         string toEmail,
         string? toName,
-        TicketMessage? previousMessage = null);
+        TicketMessage? previousMessage = null,
+        List<(string FileName, string ContentType, Stream Content)>? attachments = null);
 
     Task SendAutoReplyAsync(Project project, Ticket ticket, string toEmail, string? toName);
 }
@@ -35,7 +36,8 @@ public class EmailService : IEmailService
         TicketMessage message,
         string toEmail,
         string? toName,
-        TicketMessage? previousMessage = null)
+        TicketMessage? previousMessage = null,
+        List<(string FileName, string ContentType, Stream Content)>? attachments = null)
     {
         var smtp = project.Settings?.Smtp;
         if (smtp == null || string.IsNullOrEmpty(smtp.Host))
@@ -110,6 +112,16 @@ public class EmailService : IEmailService
             {
                 bodyBuilder.TextBody = bodyText;
             }
+            // Add file attachments
+            if (attachments != null)
+            {
+                foreach (var (fileName, contentType, content) in attachments)
+                {
+                    var ct = MimeKit.ContentType.Parse(contentType);
+                    bodyBuilder.Attachments.Add(fileName, content, ct);
+                }
+            }
+
             mimeMessage.Body = bodyBuilder.ToMessageBody();
 
             // Send

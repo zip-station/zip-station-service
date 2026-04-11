@@ -112,5 +112,6 @@ public static class DependencyInjection
         builder.Services.AddSingleton<ZipStation.Business.Services.IConnectionTestService, ZipStation.Business.Services.ConnectionTestService>();
         builder.Services.AddScoped<IAlertService, AlertService>();
         builder.Services.AddScoped<IPermissionService, PermissionService>();
+        builder.Services.AddSingleton<IFileStorageService, FileStorageService>();
     }
 }
