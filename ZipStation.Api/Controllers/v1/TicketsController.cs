@@ -465,7 +465,7 @@ public class TicketsController : BaseController
             var message = messages.FirstOrDefault(m => m.Id == messageId);
             if (message == null) return NotFound();
 
-            var storageKey = $"{companyId}/{ticket.ProjectId}/{id}/{messageId}/{MongoDB.Bson.ObjectId.GenerateNewId()}_{file.FileName}";
+            var storageKey = $"{companyId}/{ticket.ProjectId}/ticket-attachments/{id}/{messageId}/{MongoDB.Bson.ObjectId.GenerateNewId()}_{file.FileName}";
 
             using var stream = file.OpenReadStream();
             await _fileStorageService.UploadAsync(project.Settings.FileStorage, storageKey, stream, file.ContentType);
@@ -793,6 +793,48 @@ public class TicketsController : BaseController
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error assigning ticket {TicketId}", id);
+            return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
+        }
+    }
+
+    [HttpPatch("{id}/preserve")]
+    [MapToApiVersion("1.0")]
+    [ProducesResponseType(typeof(TicketResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> UpdatePreserve(string companyId, string id, [FromBody] UpdateTicketPreserveRequest request)
+    {
+        try
+        {
+            var ticket = await _ticketRepository.GetAsync(id);
+            if (ticket == null || ticket.CompanyId != companyId) return NotFound();
+
+            var gatewayResponse = await _ticketGateway.CanUpdateTicketAsync(companyId, ticket.ProjectId);
+            if (gatewayResponse.ResponseStatus != GatewayResponseCodes.Ok)
+                return ProcessGatewayResponse(gatewayResponse);
+
+            ticket.IsPreserved = request.IsPreserved;
+            var updated = await _ticketRepository.UpdateAsync(ticket);
+
+            var actor = await _userRepository.GetByFirebaseUserIdAsync(_appUser.UserId!);
+            var actorName = actor?.DisplayName ?? "Someone";
+            var systemMsg = new TicketMessage
+            {
+                TicketId = id,
+                CompanyId = companyId,
+                ProjectId = ticket.ProjectId,
+                Body = request.IsPreserved
+                    ? $"{actorName} preserved this ticket. It won't be auto-archived for inactivity."
+                    : $"{actorName} removed preserve. This ticket will auto-archive after inactivity again.",
+                IsInternalNote = false,
+                Source = MessageSource.System,
+            };
+            await _ticketMessageRepository.CreateAsync(systemMsg);
+
+            await _auditService.LogAsync(companyId, ticket.ProjectId, request.IsPreserved ? "Preserved" : "Unpreserved", "Ticket", id, _appUser);
+            return Ok(_mapper.Map<TicketResponse>(updated));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error updating preserve flag for ticket {TicketId}", id);
             return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
         }
     }
@@ -1252,6 +1294,11 @@ public class SaveDraftRequest
 public class UpdateTagsRequest
 {
     public List<string> Tags { get; set; } = new();
+}
+
+public class UpdateTicketPreserveRequest
+{
+    public bool IsPreserved { get; set; }
 }
 
 public class UpdateTicketPriorityRequest

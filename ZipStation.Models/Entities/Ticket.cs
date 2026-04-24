@@ -41,4 +41,6 @@ public class Ticket : BaseEntity
     public string? MergedIntoTicketId { get; set; }
 
     public MessageSource? LastMessageSource { get; set; }
+
+    public bool IsPreserved { get; set; }
 }

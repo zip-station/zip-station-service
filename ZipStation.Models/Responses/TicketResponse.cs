@@ -20,6 +20,7 @@ public class TicketResponse
     public List<string> LinkedTicketIds { get; set; } = new();
     public string? MergedIntoTicketId { get; set; }
     public MessageSource? LastMessageSource { get; set; }
+    public bool IsPreserved { get; set; }
     public long CreatedOnDateTime { get; set; }
     public long UpdatedOnDateTime { get; set; }
 }
