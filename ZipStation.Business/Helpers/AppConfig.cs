@@ -43,6 +43,10 @@ public class ZipStationMongoDbCollections
     public string ProjectApiKeys { get; set; } = "projectApiKeys";
     public string TicketDrafts { get; set; } = "ticketDrafts";
     public string Roles { get; set; } = "roles";
+    public string KanbanBoards { get; set; } = "kanbanBoards";
+    public string KanbanCards { get; set; } = "kanbanCards";
+    public string KanbanCardComments { get; set; } = "kanbanCardComments";
+    public string KanbanCardNumberCounters { get; set; } = "kanbanCardNumberCounters";
 }
 
 public class FirebaseConfiguration

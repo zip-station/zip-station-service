@@ -105,5 +105,37 @@ public static class MongoIndexes
                 Builders<AuditLogEntry>.IndexKeys.Ascending(a => a.EntityId))),
             new CreateIndexModel<AuditLogEntry>(Builders<AuditLogEntry>.IndexKeys.Descending(a => a.CreatedOnDateTime)),
         });
+
+        // Kanban Boards
+        var kanbanBoards = database.GetCollection<KanbanBoard>(collections.KanbanBoards);
+        await kanbanBoards.Indexes.CreateManyAsync(new[]
+        {
+            new CreateIndexModel<KanbanBoard>(Builders<KanbanBoard>.IndexKeys.Ascending(b => b.ProjectId),
+                new CreateIndexOptions { Unique = true }),
+            new CreateIndexModel<KanbanBoard>(Builders<KanbanBoard>.IndexKeys.Ascending(b => b.CompanyId)),
+        });
+
+        // Kanban Cards
+        var kanbanCards = database.GetCollection<KanbanCard>(collections.KanbanCards);
+        await kanbanCards.Indexes.CreateManyAsync(new[]
+        {
+            new CreateIndexModel<KanbanCard>(Builders<KanbanCard>.IndexKeys.Ascending(c => c.BoardId)),
+            new CreateIndexModel<KanbanCard>(Builders<KanbanCard>.IndexKeys.Combine(
+                Builders<KanbanCard>.IndexKeys.Ascending(c => c.BoardId),
+                Builders<KanbanCard>.IndexKeys.Ascending(c => c.ColumnId),
+                Builders<KanbanCard>.IndexKeys.Ascending(c => c.Position))),
+            new CreateIndexModel<KanbanCard>(Builders<KanbanCard>.IndexKeys.Combine(
+                Builders<KanbanCard>.IndexKeys.Ascending(c => c.ProjectId),
+                Builders<KanbanCard>.IndexKeys.Ascending(c => c.CardNumber))),
+            new CreateIndexModel<KanbanCard>(Builders<KanbanCard>.IndexKeys.Ascending(c => c.LinkedTicketIds)),
+            new CreateIndexModel<KanbanCard>(Builders<KanbanCard>.IndexKeys.Ascending(c => c.AssignedToUserId)),
+        });
+
+        // Kanban Card Comments
+        var kanbanCardComments = database.GetCollection<KanbanCardComment>(collections.KanbanCardComments);
+        await kanbanCardComments.Indexes.CreateManyAsync(new[]
+        {
+            new CreateIndexModel<KanbanCardComment>(Builders<KanbanCardComment>.IndexKeys.Ascending(c => c.CardId)),
+        });
     }
 }

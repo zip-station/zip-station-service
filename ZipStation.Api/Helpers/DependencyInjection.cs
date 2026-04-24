@@ -87,6 +87,18 @@ public static class DependencyInjection
 
         builder.Services.AddScoped<IRoleRepository>(sp =>
             new RoleRepository(sp.GetRequiredService<IMongoDatabase>(), collections.Roles));
+
+        builder.Services.AddScoped<IKanbanBoardRepository>(sp =>
+            new KanbanBoardRepository(sp.GetRequiredService<IMongoDatabase>(), collections.KanbanBoards));
+
+        builder.Services.AddScoped<IKanbanCardRepository>(sp =>
+            new KanbanCardRepository(sp.GetRequiredService<IMongoDatabase>(), collections.KanbanCards));
+
+        builder.Services.AddScoped<IKanbanCardCommentRepository>(sp =>
+            new KanbanCardCommentRepository(sp.GetRequiredService<IMongoDatabase>(), collections.KanbanCardComments));
+
+        builder.Services.AddScoped<IKanbanCardNumberCounterRepository>(sp =>
+            new KanbanCardNumberCounterRepository(sp.GetRequiredService<IMongoDatabase>(), collections.KanbanCardNumberCounters));
     }
 
     private static void SetupGateways(WebApplicationBuilder builder)
@@ -101,6 +113,7 @@ public static class DependencyInjection
         builder.Services.AddScoped<ICannedResponseGateway, CannedResponseGateway>();
         builder.Services.AddScoped<IAuditLogGateway, AuditLogGateway>();
         builder.Services.AddScoped<IAlertGateway, AlertGateway>();
+        builder.Services.AddScoped<IKanbanBoardGateway, KanbanBoardGateway>();
     }
 
     private static void SetupServices(WebApplicationBuilder builder)

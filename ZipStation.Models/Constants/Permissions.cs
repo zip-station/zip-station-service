@@ -70,6 +70,11 @@ public static class Permissions
     // Dashboard
     public const string DashboardView = "Dashboard.View";
 
+    // Kanban
+    public const string KanbanView = "Kanban.View";
+    public const string KanbanEdit = "Kanban.Edit";
+    public const string KanbanDelete = "Kanban.Delete";
+
     /// <summary>
     /// All permissions grouped by category for the role management UI.
     /// </summary>
@@ -87,6 +92,7 @@ public static class Permissions
         ["Alerts"] = [AlertsView, AlertsCreate, AlertsEdit, AlertsDelete],
         ["Reports"] = [ReportsView, ReportsCreate, ReportsEdit, ReportsDelete],
         ["Audit Log"] = [AuditLogView],
+        ["Kanban"] = [KanbanView, KanbanEdit, KanbanDelete],
     };
 
     /// <summary>

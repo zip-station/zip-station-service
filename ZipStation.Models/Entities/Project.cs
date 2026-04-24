@@ -41,6 +41,8 @@ public class ProjectSettings
 
     public int StaleTicketDays { get; set; } = 5;
 
+    public int KanbanArchiveDays { get; set; } = 3;
+
     public EmailSignatureSettings? EmailSignature { get; set; }
 
     public AutoReplySettings? AutoReply { get; set; }
