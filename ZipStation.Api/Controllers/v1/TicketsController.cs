@@ -36,6 +36,7 @@ public class TicketsController : BaseController
     private readonly IAlertService _alertService;
     private readonly IFileStorageService _fileStorageService;
     private readonly IMongoDatabase _database;
+    private readonly IMaxEnrichmentService _maxEnrichmentService;
 
     public TicketsController(
         ILogger<TicketsController> logger,
@@ -52,7 +53,8 @@ public class TicketsController : BaseController
         IAuditService auditService,
         IAlertService alertService,
         IFileStorageService fileStorageService,
-        IMongoDatabase database)
+        IMongoDatabase database,
+        IMaxEnrichmentService maxEnrichmentService)
     {
         _logger = logger;
         _ticketRepository = ticketRepository;
@@ -69,6 +71,7 @@ public class TicketsController : BaseController
         _alertService = alertService;
         _fileStorageService = fileStorageService;
         _database = database;
+        _maxEnrichmentService = maxEnrichmentService;
     }
 
     [HttpGet]
@@ -277,6 +280,10 @@ public class TicketsController : BaseController
                 }
                 catch { }
             });
+
+            // Fire Max enrichment (fire-and-forget; service has its own try/catch)
+            var enrichTicketId = created.Id;
+            _ = Task.Run(async () => { try { await _maxEnrichmentService.EnrichTicketAsync(enrichTicketId); } catch { } });
 
             return Ok(_mapper.Map<TicketResponse>(created));
         }
@@ -1189,7 +1196,7 @@ public class TicketsController : BaseController
         var draft = await _ticketDraftRepository.GetByTicketAndUserAsync(id, currentUser.Id);
         if (draft == null) return Ok(new { exists = false });
 
-        return Ok(new { exists = true, body = draft.Body, bodyHtml = draft.BodyHtml, isInternalNote = draft.IsInternalNote });
+        return Ok(new { exists = true, body = draft.Body, bodyHtml = draft.BodyHtml, isInternalNote = draft.IsInternalNote, isAiDraft = draft.IsAiDraft });
     }
 
     [HttpPut("{id}/draft")]
@@ -1208,7 +1215,8 @@ public class TicketsController : BaseController
                 UserId = currentUser.Id,
                 Body = request.Body,
                 BodyHtml = request.BodyHtml,
-                IsInternalNote = request.IsInternalNote
+                IsInternalNote = request.IsInternalNote,
+                IsAiDraft = request.IsAiDraft
             };
             await _ticketDraftRepository.CreateAsync(draft);
         }
@@ -1217,6 +1225,7 @@ public class TicketsController : BaseController
             draft.Body = request.Body;
             draft.BodyHtml = request.BodyHtml;
             draft.IsInternalNote = request.IsInternalNote;
+            draft.IsAiDraft = request.IsAiDraft;
             await _ticketDraftRepository.UpdateAsync(draft);
         }
 
@@ -1289,6 +1298,7 @@ public class SaveDraftRequest
     public string Body { get; set; } = string.Empty;
     public string? BodyHtml { get; set; }
     public bool IsInternalNote { get; set; }
+    public bool IsAiDraft { get; set; }
 }
 
 public class UpdateTagsRequest

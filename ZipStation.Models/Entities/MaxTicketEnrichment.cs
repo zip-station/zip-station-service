@@ -14,6 +14,11 @@ public class MaxTicketEnrichment : BaseEntity
     [DoNotChangeOnPatch]
     public string TicketId { get; set; } = string.Empty;
 
+    /// <summary>
+    /// processing | complete | failed
+    /// </summary>
+    public string Status { get; set; } = "complete";
+
     public string Category { get; set; } = "unsure";
 
     public string Summary { get; set; } = string.Empty;

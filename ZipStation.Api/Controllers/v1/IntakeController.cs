@@ -35,6 +35,7 @@ public class IntakeController : BaseController
     private readonly IEmailService _emailService;
     private readonly IAlertService _alertService;
     private readonly IIntakeRuleRepository _intakeRuleRepository;
+    private readonly IMaxEnrichmentService _maxEnrichmentService;
 
     public IntakeController(
         ILogger<IntakeController> logger,
@@ -51,7 +52,8 @@ public class IntakeController : BaseController
         IAuditService auditService,
         IEmailService emailService,
         IAlertService alertService,
-        IIntakeRuleRepository intakeRuleRepository)
+        IIntakeRuleRepository intakeRuleRepository,
+        IMaxEnrichmentService maxEnrichmentService)
     {
         _logger = logger;
         _intakeEmailRepository = intakeEmailRepository;
@@ -68,6 +70,7 @@ public class IntakeController : BaseController
         _emailService = emailService;
         _alertService = alertService;
         _intakeRuleRepository = intakeRuleRepository;
+        _maxEnrichmentService = maxEnrichmentService;
     }
 
     [HttpGet]
@@ -241,6 +244,10 @@ public class IntakeController : BaseController
                 }); } catch { }
             });
 
+            // Fire Max enrichment (fire-and-forget; service has its own try/catch)
+            var enrichTicketId = createdTicket.Id;
+            _ = Task.Run(async () => { try { await _maxEnrichmentService.EnrichTicketAsync(enrichTicketId); } catch { } });
+
             // Send auto-reply if configured AND enabled
             if (project != null && !string.IsNullOrEmpty(createdTicket.CustomerEmail)
                 && project.Settings?.AutoReply != null && project.Settings.AutoReply.Enabled)
@@ -334,6 +341,10 @@ public class IntakeController : BaseController
                             await _intakeEmailRepository.UpdateAsync(intake);
                             customer.TotalTicketCount++; customer.OpenTicketCount++;
                             await _customerRepository.UpdateAsync(customer);
+
+                            // Fire Max enrichment for this newly created ticket
+                            var bulkEnrichTicketId = ticket.Id;
+                            _ = Task.Run(async () => { try { await _maxEnrichmentService.EnrichTicketAsync(bulkEnrichTicketId); } catch { } });
                             break;
 
                         case "deny":

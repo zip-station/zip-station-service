@@ -105,6 +105,15 @@ public static class DependencyInjection
 
         builder.Services.AddScoped<IMaxExampleReplyRepository>(sp =>
             new MaxExampleReplyRepository(sp.GetRequiredService<IMongoDatabase>(), collections.MaxExampleReplies));
+
+        builder.Services.AddScoped<IMaxTaskRepository>(sp =>
+            new MaxTaskRepository(sp.GetRequiredService<IMongoDatabase>(), collections.MaxTasks));
+
+        builder.Services.AddScoped<IMaxQuestionRepository>(sp =>
+            new MaxQuestionRepository(sp.GetRequiredService<IMongoDatabase>(), collections.MaxQuestions));
+
+        builder.Services.AddScoped<IMaxTicketEnrichmentRepository>(sp =>
+            new MaxTicketEnrichmentRepository(sp.GetRequiredService<IMongoDatabase>(), collections.MaxTicketEnrichments));
     }
 
     private static void SetupGateways(WebApplicationBuilder builder)
@@ -135,5 +144,6 @@ public static class DependencyInjection
         builder.Services.AddSingleton<IFileStorageService, FileStorageService>();
         builder.Services.AddSingleton<IRateLimiter, InMemoryRateLimiter>();
         builder.Services.AddSingleton<IAnthropicTestService, AnthropicTestService>();
+        builder.Services.AddScoped<IMaxEnrichmentService, MaxEnrichmentService>();
     }
 }

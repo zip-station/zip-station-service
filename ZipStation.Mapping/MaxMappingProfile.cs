@@ -17,5 +17,10 @@ public class MaxMappingProfile : Profile
 
         CreateMap<MaxSettings, MaxSettingsResponse>()
             .ForMember(d => d.ApiKeySet, o => o.MapFrom(s => !string.IsNullOrEmpty(s.ApiKeyEncrypted)));
+
+        CreateMap<MaxTicketEnrichment, MaxTicketEnrichmentResponse>();
+        CreateMap<MaxTask, MaxTaskResponse>();
+        CreateMap<MaxTaskDetails, MaxTaskDetailsResponse>();
+        CreateMap<MaxQuestion, MaxQuestionResponse>();
     }
 }
