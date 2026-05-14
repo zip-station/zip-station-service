@@ -99,6 +99,12 @@ public static class DependencyInjection
 
         builder.Services.AddScoped<IKanbanCardNumberCounterRepository>(sp =>
             new KanbanCardNumberCounterRepository(sp.GetRequiredService<IMongoDatabase>(), collections.KanbanCardNumberCounters));
+
+        builder.Services.AddScoped<IMaxInstructionRepository>(sp =>
+            new MaxInstructionRepository(sp.GetRequiredService<IMongoDatabase>(), collections.MaxInstructions));
+
+        builder.Services.AddScoped<IMaxExampleReplyRepository>(sp =>
+            new MaxExampleReplyRepository(sp.GetRequiredService<IMongoDatabase>(), collections.MaxExampleReplies));
     }
 
     private static void SetupGateways(WebApplicationBuilder builder)
@@ -114,6 +120,7 @@ public static class DependencyInjection
         builder.Services.AddScoped<IAuditLogGateway, AuditLogGateway>();
         builder.Services.AddScoped<IAlertGateway, AlertGateway>();
         builder.Services.AddScoped<IKanbanBoardGateway, KanbanBoardGateway>();
+        builder.Services.AddScoped<IMaxGateway, MaxGateway>();
     }
 
     private static void SetupServices(WebApplicationBuilder builder)
@@ -126,5 +133,7 @@ public static class DependencyInjection
         builder.Services.AddScoped<IAlertService, AlertService>();
         builder.Services.AddScoped<IPermissionService, PermissionService>();
         builder.Services.AddSingleton<IFileStorageService, FileStorageService>();
+        builder.Services.AddSingleton<IRateLimiter, InMemoryRateLimiter>();
+        builder.Services.AddSingleton<IAnthropicTestService, AnthropicTestService>();
     }
 }

@@ -47,6 +47,11 @@ public class ZipStationMongoDbCollections
     public string KanbanCards { get; set; } = "kanbanCards";
     public string KanbanCardComments { get; set; } = "kanbanCardComments";
     public string KanbanCardNumberCounters { get; set; } = "kanbanCardNumberCounters";
+    public string MaxInstructions { get; set; } = "maxInstructions";
+    public string MaxExampleReplies { get; set; } = "maxExampleReplies";
+    public string MaxTasks { get; set; } = "maxTasks";
+    public string MaxQuestions { get; set; } = "maxQuestions";
+    public string MaxTicketEnrichments { get; set; } = "maxTicketEnrichments";
 }
 
 public class FirebaseConfiguration

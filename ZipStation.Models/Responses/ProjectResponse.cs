@@ -30,6 +30,7 @@ public class ProjectSettingsResponse
     public SpamSettingsResponse? Spam { get; set; }
     public ContactFormSettingsResponse? ContactForm { get; set; }
     public FileStorageSettingsResponse? FileStorage { get; set; }
+    public MaxSettingsResponse? Max { get; set; }
 }
 
 public class EmailSignatureSettingsResponse

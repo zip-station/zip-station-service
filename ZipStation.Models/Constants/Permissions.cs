@@ -75,6 +75,10 @@ public static class Permissions
     public const string KanbanEdit = "Kanban.Edit";
     public const string KanbanDelete = "Kanban.Delete";
 
+    // Max (AI assistant)
+    public const string MaxView = "Max.View";
+    public const string MaxEdit = "Max.Edit";
+
     /// <summary>
     /// All permissions grouped by category for the role management UI.
     /// </summary>
@@ -93,6 +97,7 @@ public static class Permissions
         ["Reports"] = [ReportsView, ReportsCreate, ReportsEdit, ReportsDelete],
         ["Audit Log"] = [AuditLogView],
         ["Kanban"] = [KanbanView, KanbanEdit, KanbanDelete],
+        ["Max"] = [MaxView, MaxEdit],
     };
 
     /// <summary>

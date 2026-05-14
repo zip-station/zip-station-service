@@ -387,6 +387,32 @@ public class ProjectsController : BaseController
                 };
             }
 
+            if (request.Max != null)
+            {
+                project.Settings.Max ??= new MaxSettings();
+
+                if (request.Max.Enabled.HasValue)
+                {
+                    if (request.Max.Enabled.Value && string.IsNullOrEmpty(project.Settings.Max.ApiKeyEncrypted))
+                        return BadRequest(new BadRequestResponse { Message = "Set an API key before enabling Max." });
+                    project.Settings.Max.Enabled = request.Max.Enabled.Value;
+                }
+                if (request.Max.Model != null)
+                    project.Settings.Max.Model = request.Max.Model;
+                if (request.Max.ProjectContext != null)
+                    project.Settings.Max.ProjectContext = request.Max.ProjectContext;
+                if (request.Max.ToneGuide != null)
+                    project.Settings.Max.ToneGuide = request.Max.ToneGuide;
+                if (request.Max.ToneAvoid != null)
+                    project.Settings.Max.ToneAvoid = request.Max.ToneAvoid;
+                if (request.Max.AutoSendEnabled.HasValue)
+                    project.Settings.Max.AutoSendEnabled = request.Max.AutoSendEnabled.Value;
+                if (request.Max.AutoSendThreshold.HasValue)
+                    project.Settings.Max.AutoSendThreshold = Math.Clamp(request.Max.AutoSendThreshold.Value, 0.0, 1.0);
+                if (request.Max.AutoSendCategories != null)
+                    project.Settings.Max.AutoSendCategories = request.Max.AutoSendCategories;
+            }
+
             var updated = await _projectRepository.UpdateAsync(project);
 
             _logger.LogInformation("Project settings updated: {ProjectId}", id);
@@ -585,6 +611,19 @@ public class UpdateProjectSettingsRequest
     public UpdateSpamSettingsRequest? Spam { get; set; }
     public int? StaleTicketDays { get; set; }
     public UpdateFileStorageSettingsRequest? FileStorage { get; set; }
+    public UpdateMaxSettingsRequest? Max { get; set; }
+}
+
+public class UpdateMaxSettingsRequest
+{
+    public bool? Enabled { get; set; }
+    public string? Model { get; set; }
+    public string? ProjectContext { get; set; }
+    public string? ToneGuide { get; set; }
+    public string? ToneAvoid { get; set; }
+    public bool? AutoSendEnabled { get; set; }
+    public double? AutoSendThreshold { get; set; }
+    public List<string>? AutoSendCategories { get; set; }
 }
 
 public class UpdateSmtpSettingsRequest

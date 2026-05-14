@@ -52,6 +52,29 @@ public class ProjectSettings
     public ContactFormSettings? ContactForm { get; set; }
 
     public FileStorageSettings? FileStorage { get; set; }
+
+    public MaxSettings? Max { get; set; }
+}
+
+public class MaxSettings
+{
+    public bool Enabled { get; set; }
+
+    public string ApiKeyEncrypted { get; set; } = string.Empty;
+
+    public string Model { get; set; } = "claude-sonnet-4-6";
+
+    public string? ProjectContext { get; set; }
+
+    public string? ToneGuide { get; set; }
+
+    public string? ToneAvoid { get; set; }
+
+    public bool AutoSendEnabled { get; set; }
+
+    public double AutoSendThreshold { get; set; } = 0.95;
+
+    public List<string> AutoSendCategories { get; set; } = new() { "billing" };
 }
 
 public class EmailSignatureSettings

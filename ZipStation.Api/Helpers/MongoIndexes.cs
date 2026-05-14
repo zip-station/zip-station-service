@@ -137,5 +137,48 @@ public static class MongoIndexes
         {
             new CreateIndexModel<KanbanCardComment>(Builders<KanbanCardComment>.IndexKeys.Ascending(c => c.CardId)),
         });
+
+        // Max Instructions
+        var maxInstructions = database.GetCollection<MaxInstruction>(collections.MaxInstructions);
+        await maxInstructions.Indexes.CreateManyAsync(new[]
+        {
+            new CreateIndexModel<MaxInstruction>(Builders<MaxInstruction>.IndexKeys.Ascending(i => i.ProjectId)),
+        });
+
+        // Max Example Replies
+        var maxExampleReplies = database.GetCollection<MaxExampleReply>(collections.MaxExampleReplies);
+        await maxExampleReplies.Indexes.CreateManyAsync(new[]
+        {
+            new CreateIndexModel<MaxExampleReply>(Builders<MaxExampleReply>.IndexKeys.Ascending(r => r.ProjectId)),
+        });
+
+        // Max Tasks
+        var maxTasks = database.GetCollection<MaxTask>(collections.MaxTasks);
+        await maxTasks.Indexes.CreateManyAsync(new[]
+        {
+            new CreateIndexModel<MaxTask>(Builders<MaxTask>.IndexKeys.Ascending(t => t.TicketId)),
+            new CreateIndexModel<MaxTask>(Builders<MaxTask>.IndexKeys.Combine(
+                Builders<MaxTask>.IndexKeys.Ascending(t => t.ProjectId),
+                Builders<MaxTask>.IndexKeys.Ascending(t => t.Status))),
+        });
+
+        // Max Questions
+        var maxQuestions = database.GetCollection<MaxQuestion>(collections.MaxQuestions);
+        await maxQuestions.Indexes.CreateManyAsync(new[]
+        {
+            new CreateIndexModel<MaxQuestion>(Builders<MaxQuestion>.IndexKeys.Ascending(q => q.ProjectId)),
+            new CreateIndexModel<MaxQuestion>(Builders<MaxQuestion>.IndexKeys.Combine(
+                Builders<MaxQuestion>.IndexKeys.Ascending(q => q.ProjectId),
+                Builders<MaxQuestion>.IndexKeys.Ascending(q => q.Status))),
+        });
+
+        // Max Ticket Enrichments
+        var maxTicketEnrichments = database.GetCollection<MaxTicketEnrichment>(collections.MaxTicketEnrichments);
+        await maxTicketEnrichments.Indexes.CreateManyAsync(new[]
+        {
+            new CreateIndexModel<MaxTicketEnrichment>(Builders<MaxTicketEnrichment>.IndexKeys.Ascending(e => e.TicketId),
+                new CreateIndexOptions { Unique = true }),
+            new CreateIndexModel<MaxTicketEnrichment>(Builders<MaxTicketEnrichment>.IndexKeys.Ascending(e => e.ProjectId)),
+        });
     }
 }
