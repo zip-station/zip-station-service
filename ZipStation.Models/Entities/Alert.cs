@@ -36,7 +36,8 @@ public enum AlertTriggerType
     HighSpamScore,
     KeywordInSubject,
     KeywordInBody,
-    CustomerContact
+    CustomerContact,
+    CustomerReply
 }
 
 public enum AlertChannelType
