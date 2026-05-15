@@ -10,11 +10,13 @@ public interface IMaxGateway
     Task<GatewayResponse> CanViewAsync(string companyId, string projectId);
     Task<GatewayResponse> CanEditAsync(string companyId, string projectId);
     Task<GatewayResponse> CanTestConnectionAsync(string companyId, string projectId);
+    Task<GatewayResponse> CanAnalyzeToneAsync(string companyId, string projectId);
 }
 
 public class MaxGateway : IMaxGateway
 {
     private static readonly TimeSpan TestConnectionCooldown = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ToneAnalyzerCooldown = TimeSpan.FromHours(1);
 
     private readonly IAppUser _appUser;
     private readonly IPermissionService _permissionService;
@@ -61,6 +63,24 @@ public class MaxGateway : IMaxGateway
             {
                 ResponseStatus = GatewayResponseCodes.BadRequest,
                 ResponseMessage = $"Please wait {Math.Ceiling(retryAfter.TotalSeconds)}s before testing again."
+            };
+        }
+
+        return Ok();
+    }
+
+    public async Task<GatewayResponse> CanAnalyzeToneAsync(string companyId, string projectId)
+    {
+        var editGate = await CanEditAsync(companyId, projectId);
+        if (editGate.ResponseStatus != GatewayResponseCodes.Ok) return editGate;
+
+        var key = $"max:tone-analyzer:{_appUser.UserId}:{projectId}";
+        if (!_rateLimiter.TryAcquire(key, ToneAnalyzerCooldown, out var retryAfter))
+        {
+            return new GatewayResponse
+            {
+                ResponseStatus = GatewayResponseCodes.BadRequest,
+                ResponseMessage = $"You can re-run the tone analyzer in {Math.Ceiling(retryAfter.TotalMinutes)} minutes."
             };
         }
 

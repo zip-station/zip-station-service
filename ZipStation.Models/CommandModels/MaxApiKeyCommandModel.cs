@@ -11,3 +11,8 @@ public class MaxTestConnectionCommandModel
 
     public string? Model { get; set; }
 }
+
+public class MaxToneAnalyzerCommandModel
+{
+    public int? ReplyCount { get; set; }
+}

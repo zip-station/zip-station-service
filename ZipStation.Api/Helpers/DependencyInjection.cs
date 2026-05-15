@@ -145,5 +145,6 @@ public static class DependencyInjection
         builder.Services.AddSingleton<IRateLimiter, InMemoryRateLimiter>();
         builder.Services.AddSingleton<IAnthropicTestService, AnthropicTestService>();
         builder.Services.AddScoped<IMaxEnrichmentService, MaxEnrichmentService>();
+        builder.Services.AddScoped<IMaxToneAnalyzerService, MaxToneAnalyzerService>();
     }
 }

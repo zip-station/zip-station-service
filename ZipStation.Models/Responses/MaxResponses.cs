@@ -109,3 +109,20 @@ public class TicketMaxResponse
     public List<MaxTaskResponse> Tasks { get; set; } = new();
     public List<MaxQuestionResponse> Questions { get; set; } = new();
 }
+
+public class MaxTaskWithTicketResponse
+{
+    public MaxTaskResponse Task { get; set; } = new();
+    public long TicketNumber { get; set; }
+    public string TicketSubject { get; set; } = string.Empty;
+    public string? CustomerName { get; set; }
+    public string? CustomerEmail { get; set; }
+}
+
+public class MaxToneAnalyzerResponse
+{
+    public string? ToneGuide { get; set; }
+    public string? ToneAvoid { get; set; }
+    public List<int> RecommendedExampleIndices { get; set; } = new();
+    public List<string> Replies { get; set; } = new();
+}

@@ -2,6 +2,7 @@ using Asp.Versioning;
 using AutoMapper;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using MongoDB.Driver;
 using ZipStation.Business.Gateways;
 using ZipStation.Business.Helpers;
 using ZipStation.Business.Repositories;
@@ -22,9 +23,12 @@ public class MaxController : BaseController
     private readonly IMaxGateway _maxGateway;
     private readonly IMaxInstructionRepository _instructionRepository;
     private readonly IMaxExampleReplyRepository _exampleReplyRepository;
+    private readonly IMaxTaskRepository _taskRepository;
+    private readonly ITicketRepository _ticketRepository;
     private readonly IProjectRepository _projectRepository;
     private readonly IUserRepository _userRepository;
     private readonly IAnthropicTestService _anthropicTestService;
+    private readonly IMaxToneAnalyzerService _toneAnalyzerService;
     private readonly IAuditService _auditService;
     private readonly IAppUser _appUser;
     private readonly IMapper _mapper;
@@ -34,9 +38,12 @@ public class MaxController : BaseController
         IMaxGateway maxGateway,
         IMaxInstructionRepository instructionRepository,
         IMaxExampleReplyRepository exampleReplyRepository,
+        IMaxTaskRepository taskRepository,
+        ITicketRepository ticketRepository,
         IProjectRepository projectRepository,
         IUserRepository userRepository,
         IAnthropicTestService anthropicTestService,
+        IMaxToneAnalyzerService toneAnalyzerService,
         IAuditService auditService,
         IAppUser appUser,
         IMapper mapper)
@@ -45,12 +52,71 @@ public class MaxController : BaseController
         _maxGateway = maxGateway;
         _instructionRepository = instructionRepository;
         _exampleReplyRepository = exampleReplyRepository;
+        _taskRepository = taskRepository;
+        _ticketRepository = ticketRepository;
         _projectRepository = projectRepository;
         _userRepository = userRepository;
         _anthropicTestService = anthropicTestService;
+        _toneAnalyzerService = toneAnalyzerService;
         _auditService = auditService;
         _appUser = appUser;
         _mapper = mapper;
+    }
+
+    [HttpGet("tasks")]
+    [MapToApiVersion("1.0")]
+    [ProducesResponseType(typeof(List<MaxTaskWithTicketResponse>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> ListPendingTasks(string companyId, string projectId)
+    {
+        try
+        {
+            var gatewayResponse = await _maxGateway.CanViewAsync(companyId, projectId);
+            if (gatewayResponse.ResponseStatus != GatewayResponseCodes.Ok)
+                return ProcessGatewayResponse(gatewayResponse);
+
+            var pending = await _taskRepository.GetPendingByProjectIdAsync(projectId);
+            if (pending.Count == 0)
+                return Ok(new List<MaxTaskWithTicketResponse>());
+
+            // Bulk load tickets so we can show ticket number + subject per task
+            var ticketIds = pending.Select(t => t.TicketId).Distinct().ToList();
+            var ticketCollection = _ticketRepository.GetCollection();
+            var ticketFilter = MongoDB.Driver.Builders<Models.Entities.Ticket>.Filter.In(t => t.Id, ticketIds)
+                             & MongoDB.Driver.Builders<Models.Entities.Ticket>.Filter.Eq(t => t.IsVoid, false);
+            var tickets = await ticketCollection.Find(ticketFilter).ToListAsync();
+            var ticketsById = tickets.ToDictionary(t => t.Id);
+
+            // Only show tasks for tickets the maintainer can still act on.
+            // Closed/Resolved/Merged/Abandoned tickets shouldn't have pending
+            // Max suggestions in the dashboard — they're stale.
+            var result = pending
+                .Where(t => ticketsById.ContainsKey(t.TicketId))
+                .Where(t =>
+                {
+                    var s = ticketsById[t.TicketId].Status;
+                    return s == Models.Enums.TicketStatus.Open || s == Models.Enums.TicketStatus.Pending;
+                })
+                .Select(t =>
+                {
+                    var ticket = ticketsById[t.TicketId];
+                    return new MaxTaskWithTicketResponse
+                    {
+                        Task = _mapper.Map<MaxTaskResponse>(t),
+                        TicketNumber = ticket.TicketNumber,
+                        TicketSubject = ticket.Subject,
+                        CustomerName = ticket.CustomerName,
+                        CustomerEmail = ticket.CustomerEmail,
+                    };
+                })
+                .ToList();
+
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error listing Max tasks for project {ProjectId}", projectId);
+            return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
+        }
     }
 
     // ---------- API key ----------
@@ -177,6 +243,41 @@ public class MaxController : BaseController
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error testing Max connection for project {ProjectId}", projectId);
+            return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
+        }
+    }
+
+    [HttpPost("tone-analyzer")]
+    [MapToApiVersion("1.0")]
+    [ProducesResponseType(typeof(MaxToneAnalyzerResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> RunToneAnalyzer(string companyId, string projectId, [FromBody] MaxToneAnalyzerCommandModel commandModel)
+    {
+        try
+        {
+            var gatewayResponse = await _maxGateway.CanAnalyzeToneAsync(companyId, projectId);
+            if (gatewayResponse.ResponseStatus != GatewayResponseCodes.Ok)
+                return ProcessGatewayResponse(gatewayResponse);
+
+            var project = await _projectRepository.GetAsync(projectId);
+            if (project == null || project.CompanyId != companyId) return NotFound();
+
+            var (success, error, result) = await _toneAnalyzerService.AnalyzeAsync(projectId, commandModel.ReplyCount ?? 25);
+            if (!success || result == null)
+                return BadRequest(new BadRequestResponse { Message = error ?? "Tone analysis failed." });
+
+            await _auditService.LogAsync(companyId, projectId, "MaxToneAnalyzerRun", "Project", projectId, _appUser);
+
+            return Ok(new MaxToneAnalyzerResponse
+            {
+                ToneGuide = result.ToneGuide,
+                ToneAvoid = result.ToneAvoid,
+                RecommendedExampleIndices = result.RecommendedExampleIndices,
+                Replies = result.Replies,
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error running Max tone analyzer for project {ProjectId}", projectId);
             return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
         }
     }

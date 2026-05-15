@@ -720,6 +720,14 @@ public class TicketsController : BaseController
             await _ticketMessageRepository.CreateAsync(systemMsg);
 
             await _auditService.LogAsync(companyId, sourceTicket.ProjectId, "Merged", "Ticket", id, _appUser, $"Merged into {request.TargetTicketId}");
+
+            // Source ticket is now Merged — cancel any pending Max suggestions for it.
+            _ = Task.Run(async () =>
+            {
+                try { await _maxTaskRepository.SoftDeletePendingByTicketIdAsync(id); }
+                catch (Exception ex) { _logger.LogWarning(ex, "Failed to cancel Max tasks for merged ticket {TicketId}", id); }
+            });
+
             return Ok(_mapper.Map<TicketResponse>(targetTicket));
         }
         catch (Exception ex)
@@ -761,6 +769,22 @@ public class TicketsController : BaseController
 
             _logger.LogInformation("Ticket {TicketId} status changed to {Status}", id, request.Status);
             await _auditService.LogAsync(companyId, ticket.ProjectId, "StatusChanged", "Ticket", id, _appUser, $"Status: {request.Status}");
+
+            // Cancel any pending Max suggestions for this ticket once it's no
+            // longer actionable. Re-opening doesn't restore them — that's fine,
+            // re-enrich button is one click away.
+            if (request.Status == TicketStatus.Resolved
+                || request.Status == TicketStatus.Closed
+                || request.Status == TicketStatus.Merged
+                || request.Status == TicketStatus.Abandoned)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try { await _maxTaskRepository.SoftDeletePendingByTicketIdAsync(id); }
+                    catch (Exception ex) { _logger.LogWarning(ex, "Failed to cancel Max tasks for closed ticket {TicketId}", id); }
+                });
+            }
+
             return Ok(_mapper.Map<TicketResponse>(updated));
         }
         catch (Exception ex)
