@@ -21,6 +21,7 @@ public interface IKanbanCardRepository : IBaseRepository<KanbanCard>
         string resolvedColumnId);
     Task<KanbanCard?> GetByCardNumberAsync(string projectId, long cardNumber);
     Task<List<KanbanCard>> GetByTicketIdAsync(string ticketId);
+    Task<List<KanbanCard>> GetByAnyLinkedTicketIdAsync(IEnumerable<string> ticketIds);
     Task<double> GetMaxPositionInColumnAsync(string boardId, string columnId);
     Task<bool> AnyInColumnAsync(string boardId, string columnId);
 }
@@ -121,6 +122,15 @@ public class KanbanCardRepository : BaseRepository<KanbanCard>, IKanbanCardRepos
     public async Task<List<KanbanCard>> GetByTicketIdAsync(string ticketId)
     {
         var filter = Builders<KanbanCard>.Filter.AnyEq(c => c.LinkedTicketIds, ticketId)
+                   & Builders<KanbanCard>.Filter.Eq(c => c.IsVoid, false);
+        return await _Collection.Find(filter).ToListAsync();
+    }
+
+    public async Task<List<KanbanCard>> GetByAnyLinkedTicketIdAsync(IEnumerable<string> ticketIds)
+    {
+        var ids = ticketIds?.Where(id => !string.IsNullOrEmpty(id)).Distinct().ToList() ?? new List<string>();
+        if (ids.Count == 0) return new List<KanbanCard>();
+        var filter = Builders<KanbanCard>.Filter.AnyIn(c => c.LinkedTicketIds, ids)
                    & Builders<KanbanCard>.Filter.Eq(c => c.IsVoid, false);
         return await _Collection.Find(filter).ToListAsync();
     }

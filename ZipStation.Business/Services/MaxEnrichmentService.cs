@@ -21,6 +21,8 @@ public class MaxEnrichmentService : IMaxEnrichmentService
     private const string AnthropicVersion = "2023-06-01";
     private const int MaxExampleRepliesInPrompt = 10;
     private const int MaxOpenTicketsInPrompt = 30;
+    private const int MaxAvailableStoriesInPrompt = 25;
+    private const int AvailableStoriesRecencyDays = 90;
     private const int MaxOutputTokens = 2000;
 
     private static readonly HttpClient _httpClient = new()
@@ -36,6 +38,8 @@ public class MaxEnrichmentService : IMaxEnrichmentService
     private readonly IMaxTicketEnrichmentRepository _enrichmentRepository;
     private readonly IMaxTaskRepository _taskRepository;
     private readonly IMaxQuestionRepository _questionRepository;
+    private readonly IKanbanBoardRepository _kanbanBoardRepository;
+    private readonly IKanbanCardRepository _kanbanCardRepository;
     private readonly ILogger<MaxEnrichmentService> _logger;
 
     public MaxEnrichmentService(
@@ -47,6 +51,8 @@ public class MaxEnrichmentService : IMaxEnrichmentService
         IMaxTicketEnrichmentRepository enrichmentRepository,
         IMaxTaskRepository taskRepository,
         IMaxQuestionRepository questionRepository,
+        IKanbanBoardRepository kanbanBoardRepository,
+        IKanbanCardRepository kanbanCardRepository,
         ILogger<MaxEnrichmentService> logger)
     {
         _projectRepository = projectRepository;
@@ -57,6 +63,8 @@ public class MaxEnrichmentService : IMaxEnrichmentService
         _enrichmentRepository = enrichmentRepository;
         _taskRepository = taskRepository;
         _questionRepository = questionRepository;
+        _kanbanBoardRepository = kanbanBoardRepository;
+        _kanbanCardRepository = kanbanCardRepository;
         _logger = logger;
     }
 
@@ -99,8 +107,42 @@ public class MaxEnrichmentService : IMaxEnrichmentService
             var openEnrichments = await _enrichmentRepository.GetRecentByProjectIdAsync(ticket.ProjectId, MaxOpenTicketsInPrompt);
             var enrichmentByTicketId = openEnrichments.ToDictionary(e => e.TicketId);
 
+            // Existing links on the current ticket — used so Max doesn't suggest
+            // creating duplicates or relinking already-linked tickets/stories.
+            var linkedKanbanCards = await _kanbanCardRepository.GetByTicketIdAsync(ticketId);
+            var kanbanBoard = await _kanbanBoardRepository.GetByProjectIdAsync(ticket.ProjectId);
+            var resolvedColumnId = kanbanBoard?.ResolvedColumnId;
+
+            // Kanban stories linked to any of the recent open tickets, so Max can
+            // see "related ticket X is already tracked in STR-N" and suggest
+            // linking instead of creating a duplicate story.
+            var openTicketIds = openTickets.Select(t => t.Id).ToList();
+            var cardsForOpenTickets = openTicketIds.Count > 0
+                ? await _kanbanCardRepository.GetByAnyLinkedTicketIdAsync(openTicketIds)
+                : new List<KanbanCard>();
+            var cardsByLinkedTicketId = new Dictionary<string, List<KanbanCard>>();
+            foreach (var card in cardsForOpenTickets)
+            {
+                foreach (var linkedId in card.LinkedTicketIds)
+                {
+                    if (!cardsByLinkedTicketId.TryGetValue(linkedId, out var list))
+                    {
+                        list = new List<KanbanCard>();
+                        cardsByLinkedTicketId[linkedId] = list;
+                    }
+                    list.Add(card);
+                }
+            }
+
+            // All non-Done kanban stories in the project. Max scans these to see
+            // if an existing story already covers the current ticket's issue, so
+            // it can suggest link_to_story instead of creating a duplicate.
+            var availableStories = kanbanBoard != null
+                ? (await GetAvailableStoriesAsync(kanbanBoard.Id, resolvedColumnId))
+                : new List<KanbanCard>();
+
             var systemPrompt = BuildSystemPrompt(project.Settings.Max, instructions, examples);
-            var userMessage = BuildUserMessage(ticket, latestCustomerMessage, openTickets, enrichmentByTicketId);
+            var userMessage = BuildUserMessage(ticket, latestCustomerMessage, openTickets, enrichmentByTicketId, linkedKanbanCards, resolvedColumnId, cardsByLinkedTicketId, availableStories);
 
             var rawResponse = await CallAnthropicAsync(apiKey, model, systemPrompt, userMessage, cancellationToken);
             if (rawResponse == null)
@@ -180,7 +222,7 @@ public class MaxEnrichmentService : IMaxEnrichmentService
             }
 
             // Task (if action needs human approval)
-            await CreateTaskIfNeededAsync(ticket, enrichment, parsed);
+            await CreateTasksFromParsedAsync(ticket, enrichment, parsed);
 
             _logger.LogInformation(
                 "Max enriched ticket {TicketId}: category={Category} confidence={Confidence:F2} action={Action}",
@@ -228,6 +270,26 @@ public class MaxEnrichmentService : IMaxEnrichmentService
         catch (Exception ex) { _logger.LogWarning(ex, "Failed to write enrichment status {Status} for ticket {TicketId}", status, ticket.Id); }
     }
 
+    private async Task<List<KanbanCard>> GetAvailableStoriesAsync(string boardId, string? resolvedColumnId)
+    {
+        // Customer-derived tickets almost always map to Bug or Feature stories.
+        // Improvement and TechDebt are internal engineering work and rarely
+        // correspond to a customer ticket, so we exclude them. We also cap
+        // recency so stale stories don't dilute Max's attention.
+        var cutoff = DateTimeOffset.UtcNow.AddDays(-AvailableStoriesRecencyDays).ToUnixTimeMilliseconds();
+        var collection = _kanbanCardRepository.GetCollection();
+        var filter = Builders<KanbanCard>.Filter.Eq(c => c.BoardId, boardId)
+                   & Builders<KanbanCard>.Filter.Eq(c => c.IsVoid, false)
+                   & Builders<KanbanCard>.Filter.In(c => c.Type, new[] { KanbanCardType.Bug, KanbanCardType.Feature })
+                   & Builders<KanbanCard>.Filter.Gte(c => c.UpdatedOnDateTime, cutoff);
+        if (!string.IsNullOrEmpty(resolvedColumnId))
+            filter &= Builders<KanbanCard>.Filter.Ne(c => c.ColumnId, resolvedColumnId);
+        return await collection.Find(filter)
+            .SortByDescending(c => c.UpdatedOnDateTime)
+            .Limit(MaxAvailableStoriesInPrompt)
+            .ToListAsync();
+    }
+
     private async Task<List<Ticket>> GetRecentOpenTicketsAsync(string projectId, int limit, string excludeTicketId)
     {
         var collection = _ticketRepository.GetCollection();
@@ -241,34 +303,60 @@ public class MaxEnrichmentService : IMaxEnrichmentService
             .ToListAsync();
     }
 
-    private async Task CreateTaskIfNeededAsync(Ticket ticket, MaxTicketEnrichment enrichment, ParsedEnrichment parsed)
+    private async Task CreateTasksFromParsedAsync(Ticket ticket, MaxTicketEnrichment enrichment, ParsedEnrichment parsed)
     {
-        var actionType = parsed.SuggestedAction?.Type ?? "no_action";
+        await CreateTaskFromActionAsync(ticket, enrichment, parsed.SuggestedAction, isPrimary: true);
+        if (parsed.AdditionalActions != null)
+        {
+            foreach (var action in parsed.AdditionalActions)
+            {
+                if (action?.Type == parsed.SuggestedAction?.Type) continue; // avoid duplicating the primary
+                await CreateTaskFromActionAsync(ticket, enrichment, action, isPrimary: false);
+            }
+        }
+    }
+
+    private async Task CreateTaskFromActionAsync(Ticket ticket, MaxTicketEnrichment enrichment, ParsedSuggestedAction? action, bool isPrimary)
+    {
+        var actionType = action?.Type ?? "no_action";
         if (actionType == "no_action") return;
 
         var details = new MaxTaskDetails();
         switch (actionType)
         {
             case "draft_reply":
-                details.Draft = parsed.SuggestedAction?.Draft;
-                details.Notes = parsed.SuggestedAction?.Notes;
+                details.Draft = action?.Draft;
+                details.Notes = action?.Notes;
                 break;
             case "merge_duplicate":
                 details.DuplicateOfTicketId = enrichment.DuplicateOfTicketId;
-                details.Notes = parsed.SuggestedAction?.Notes;
+                details.Notes = action?.Notes;
                 break;
             case "add_to_backlog":
-                details.SuggestedTitle = enrichment.Summary;
+                details.SuggestedTitle = !string.IsNullOrWhiteSpace(action?.Notes) ? action.Notes : enrichment.Summary;
                 details.SuggestedKanbanType = MapCategoryToKanbanType(enrichment.Category);
-                details.Notes = parsed.SuggestedAction?.Notes;
+                details.Notes = action?.Notes;
+                break;
+            case "link_to_story":
+                if (action?.CardNumber == null) return; // can't act without a target
+                var targetCard = await _kanbanCardRepository.GetByCardNumberAsync(ticket.ProjectId, action.CardNumber.Value);
+                if (targetCard == null) return; // story Max picked doesn't exist; skip
+                // Skip if already linked — Max may have missed an existing link.
+                if (targetCard.LinkedTicketIds.Contains(ticket.Id)) return;
+                details.LinkToStoryCardNumber = action.CardNumber;
+                details.LinkToStoryTitle = targetCard.Title;
+                details.SuggestedKanbanType = targetCard.Type.ToString();
+                details.Notes = action?.Notes;
                 break;
             case "escalated":
             case "investigate":
-                details.Notes = parsed.SuggestedAction?.Notes;
+                details.Notes = action?.Notes;
                 break;
         }
 
-        if (enrichment.FlaggedQuestion && !string.IsNullOrEmpty(enrichment.QuestionId))
+        // Question association lives on the primary task only — questions are about the
+        // enrichment as a whole, not about each spawned action.
+        if (isPrimary && enrichment.FlaggedQuestion && !string.IsNullOrEmpty(enrichment.QuestionId))
             details.QuestionId = enrichment.QuestionId;
 
         var task = new MaxTask
@@ -386,17 +474,56 @@ public class MaxEnrichmentService : IMaxEnrichmentService
         sb.AppendLine("One sentence, max 140 chars, written for the maintainer. State the issue, not the user's framing. Drop pleasantries.");
         sb.AppendLine();
 
-        sb.AppendLine("## Duplicate detection");
-        sb.AppendLine("Compare against open_issues. Set duplicate_of to an existing id ONLY if fixing the existing issue would resolve this one. When unsure, leave null and use related_ids instead.");
+        sb.AppendLine("## Duplicate detection vs linking");
+        sb.AppendLine("Set `duplicate_of` ONLY when the SAME customer (same email address) opened multiple tickets about the same issue. A merge collapses one ticket into another; that only makes sense when there's one conversation that got split.");
+        sb.AppendLine();
+        sb.AppendLine("When DIFFERENT customers report the same underlying issue:");
+        sb.AppendLine("- Add the related ticket ids to `related_ids` to surface the connection");
+        sb.AppendLine("- Leave `duplicate_of` null");
+        sb.AppendLine("- Pick `draft_reply` (or `investigate` for bugs) as the suggested_action — each customer still needs their own reply");
+        sb.AppendLine("- In the suggested_action.notes, mention the pattern (e.g., \"3 customers have reported this in the past week — consider adding to backlog\")");
+        sb.AppendLine();
+        sb.AppendLine("Never use `merge_duplicate` across different customer emails. Merging would lose one customer's conversation.");
+        sb.AppendLine("When unsure between duplicate and related, default to related — false duplicates destroy real signal.");
         sb.AppendLine();
 
         sb.AppendLine("## Suggested action types");
         sb.AppendLine("- draft_reply: you can write a useful response. Include the draft.");
         sb.AppendLine("- investigate: bug needing maintainer's eyes on code. Include investigation hints in notes.");
-        sb.AppendLine("- merge_duplicate: duplicate_of is set; send a thanks/tracked-here ack.");
-        sb.AppendLine("- add_to_backlog: feature request worth tracking. Include a kanban-suitable title in notes.");
+        sb.AppendLine("- merge_duplicate: `duplicate_of` is set AND the customer emails match. Send a thanks/tracked-here ack.");
+        sb.AppendLine("- add_to_backlog: feature request worth tracking, OR a recurring bug pattern that has NO existing kanban story. Include a kanban-suitable title in notes.");
+        sb.AppendLine("- link_to_story: an existing non-Done kanban story in `<available_stories>` already covers this issue. Set `card_number` to the matching story's cardNumber. Prefer this over add_to_backlog whenever a matching story exists.");
         sb.AppendLine("- no_action: spam, off-topic, or feedback that needs no response.");
         sb.AppendLine("- escalated: ambiguous, emotionally charged, legal/safety/refund disputes, or confidence below 0.5.");
+        sb.AppendLine();
+
+        sb.AppendLine("## Additional actions");
+        sb.AppendLine("A single ticket can warrant more than one thing. The PRIMARY suggested_action is the most user-facing thing (usually replying to the customer). In `additional_actions`, you can include extra actions the maintainer should also consider — currently this is most useful for `add_to_backlog` when a bug or feature request also deserves a tracking story.");
+        sb.AppendLine();
+        sb.AppendLine("Use additional_actions when:");
+        sb.AppendLine("- Primary action is draft_reply or investigate AND the ticket describes a bug that needs a code fix or a feature request worth tracking. Pick ONE of:");
+        sb.AppendLine("  - `link_to_story` with `card_number` set to a matching non-Done story in `<available_stories>` (preferred if a match exists)");
+        sb.AppendLine("  - `add_to_backlog` with a kanban-suitable title in notes (only if no matching open story exists)");
+        sb.AppendLine("- Don't duplicate the primary action in additional_actions");
+        sb.AppendLine("- If primary is already add_to_backlog, link_to_story, merge_duplicate, no_action, or escalated, leave additional_actions empty");
+        sb.AppendLine();
+
+        sb.AppendLine("## Use existing kanban stories before creating new ones");
+        sb.AppendLine("Three sources of kanban context matter:");
+        sb.AppendLine("1. `<existing_links>` — kanban stories ALREADY linked to the current ticket.");
+        sb.AppendLine("2. Each `<open_issues>` item has `linked_stories` — stories already linked to OTHER recent tickets.");
+        sb.AppendLine("3. `<available_stories>` — every non-Done kanban story in the project, whether or not it's linked to anything.");
+        sb.AppendLine();
+        sb.AppendLine("Decision order when the ticket describes a bug or feature request:");
+        sb.AppendLine("a) If the current ticket already has a non-Done story in `existing_links` that covers it → don't suggest anything new. Mention the existing story in reasoning.");
+        sb.AppendLine("b) Otherwise, scan `available_stories` for a non-Done story whose title/type clearly matches this ticket's issue → suggest `link_to_story` with that story's `card_number`. This is the most common case after the project has been running for a while.");
+        sb.AppendLine("c) Only if no matching story exists anywhere → suggest `add_to_backlog` with a kanban-suitable title.");
+        sb.AppendLine();
+        sb.AppendLine("Other rules:");
+        sb.AppendLine("- You MAY suggest `add_to_backlog` if all matching stories have `is_done: true` and the issue has resurfaced — note that in your reasoning.");
+        sb.AppendLine("- Do NOT include ticket ids in `related_ids` if they are already in `linked_ticket_ids`.");
+        sb.AppendLine("- When you mention an existing story in your reasoning or notes, use the `STR-N` format.");
+        sb.AppendLine("- Don't enumerate candidate stories you considered and rejected. Only mention stories you're recommending action on (or that are already linked). The maintainer doesn't need to see your scratch work.");
         sb.AppendLine();
 
         sb.AppendLine("## Reply drafting");
@@ -427,10 +554,14 @@ public class MaxEnrichmentService : IMaxEnrichmentService
         sb.AppendLine("  \"platform\": \"ios | android | web | unknown\",");
         sb.AppendLine("  \"tags\": [],");
         sb.AppendLine("  \"suggested_action\": {");
-        sb.AppendLine("    \"type\": \"draft_reply | investigate | merge_duplicate | add_to_backlog | no_action | escalated\",");
+        sb.AppendLine("    \"type\": \"draft_reply | investigate | merge_duplicate | add_to_backlog | link_to_story | no_action | escalated\",");
         sb.AppendLine("    \"draft\": null,");
-        sb.AppendLine("    \"notes\": null");
+        sb.AppendLine("    \"notes\": null,");
+        sb.AppendLine("    \"card_number\": null");
         sb.AppendLine("  },");
+        sb.AppendLine("  \"additional_actions\": [");
+        sb.AppendLine("    { \"type\": \"link_to_story\", \"card_number\": 6, \"notes\": \"Story STR-6 already tracks this bug\" }");
+        sb.AppendLine("  ],");
         sb.AppendLine("  \"flag_question\": false,");
         sb.AppendLine("  \"question_for_maintainer\": null,");
         sb.AppendLine("  \"question_context_excerpt\": null,");
@@ -440,26 +571,70 @@ public class MaxEnrichmentService : IMaxEnrichmentService
         return sb.ToString();
     }
 
-    private static string BuildUserMessage(Ticket ticket, TicketMessage? latestCustomerMessage, List<Ticket> openTickets, Dictionary<string, MaxTicketEnrichment> enrichmentByTicketId)
+    private static string BuildUserMessage(
+        Ticket ticket,
+        TicketMessage? latestCustomerMessage,
+        List<Ticket> openTickets,
+        Dictionary<string, MaxTicketEnrichment> enrichmentByTicketId,
+        List<KanbanCard> linkedKanbanCards,
+        string? resolvedColumnId,
+        Dictionary<string, List<KanbanCard>> cardsByLinkedTicketId,
+        List<KanbanCard> availableStories)
     {
         var openIssuesPayload = openTickets.Select(t =>
         {
             enrichmentByTicketId.TryGetValue(t.Id, out var e);
+            cardsByLinkedTicketId.TryGetValue(t.Id, out var cards);
             return new
             {
                 id = t.Id,
                 ticketNumber = t.TicketNumber,
                 subject = t.Subject,
+                customerEmail = t.CustomerEmail,
                 category = e?.Category,
                 summary = e?.Summary,
                 tags = e?.Tags ?? new List<string>(),
+                linked_stories = (cards ?? new List<KanbanCard>()).Select(c => new
+                {
+                    cardNumber = c.CardNumber,
+                    title = c.Title,
+                    type = c.Type.ToString(),
+                    is_done = !string.IsNullOrEmpty(resolvedColumnId) && c.ColumnId == resolvedColumnId,
+                }).ToList(),
             };
+        }).ToList();
+
+        var existingLinksPayload = new
+        {
+            linked_ticket_ids = ticket.LinkedTicketIds ?? new List<string>(),
+            linked_stories = linkedKanbanCards.Select(c => new
+            {
+                cardNumber = c.CardNumber,
+                title = c.Title,
+                type = c.Type.ToString(),
+                is_done = !string.IsNullOrEmpty(resolvedColumnId) && c.ColumnId == resolvedColumnId,
+            }).ToList(),
+        };
+
+        var availableStoriesPayload = availableStories.Select(c => new
+        {
+            cardNumber = c.CardNumber,
+            title = c.Title,
+            type = c.Type.ToString(),
         }).ToList();
 
         var sb = new StringBuilder();
         sb.AppendLine("<open_issues>");
         sb.AppendLine(JsonSerializer.Serialize(openIssuesPayload, new JsonSerializerOptions { WriteIndented = false }));
         sb.AppendLine("</open_issues>");
+        sb.AppendLine();
+        sb.AppendLine("<existing_links>");
+        sb.AppendLine(JsonSerializer.Serialize(existingLinksPayload, new JsonSerializerOptions { WriteIndented = false }));
+        sb.AppendLine("</existing_links>");
+        sb.AppendLine();
+        sb.AppendLine("<available_stories>");
+        sb.AppendLine(JsonSerializer.Serialize(availableStoriesPayload, new JsonSerializerOptions { WriteIndented = false }));
+        sb.AppendLine("</available_stories>");
         sb.AppendLine();
         sb.AppendLine("<ticket>");
         sb.AppendLine($"Source: {ticket.CreationSource}");
@@ -549,6 +724,7 @@ public class MaxEnrichmentService : IMaxEnrichmentService
         public string? Platform { get; set; }
         public List<string>? Tags { get; set; }
         public ParsedSuggestedAction? SuggestedAction { get; set; }
+        public List<ParsedSuggestedAction>? AdditionalActions { get; set; }
         public bool FlagQuestion { get; set; }
         public string? QuestionForMaintainer { get; set; }
         public string? QuestionContextExcerpt { get; set; }
@@ -560,5 +736,6 @@ public class MaxEnrichmentService : IMaxEnrichmentService
         public string? Type { get; set; }
         public string? Draft { get; set; }
         public string? Notes { get; set; }
+        public long? CardNumber { get; set; }
     }
 }

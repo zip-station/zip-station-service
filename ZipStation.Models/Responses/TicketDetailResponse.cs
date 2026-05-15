@@ -4,4 +4,5 @@ public class TicketDetailResponse
 {
     public TicketResponse Ticket { get; set; } = new();
     public List<TicketMessageResponse> Messages { get; set; } = new();
+    public List<TicketResponse> LinkedTickets { get; set; } = new();
 }

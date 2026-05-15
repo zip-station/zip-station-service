@@ -37,6 +37,7 @@ public class TicketsController : BaseController
     private readonly IFileStorageService _fileStorageService;
     private readonly IMongoDatabase _database;
     private readonly IMaxEnrichmentService _maxEnrichmentService;
+    private readonly IMaxTaskRepository _maxTaskRepository;
 
     public TicketsController(
         ILogger<TicketsController> logger,
@@ -54,7 +55,8 @@ public class TicketsController : BaseController
         IAlertService alertService,
         IFileStorageService fileStorageService,
         IMongoDatabase database,
-        IMaxEnrichmentService maxEnrichmentService)
+        IMaxEnrichmentService maxEnrichmentService,
+        IMaxTaskRepository maxTaskRepository)
     {
         _logger = logger;
         _ticketRepository = ticketRepository;
@@ -72,6 +74,7 @@ public class TicketsController : BaseController
         _fileStorageService = fileStorageService;
         _database = database;
         _maxEnrichmentService = maxEnrichmentService;
+        _maxTaskRepository = maxTaskRepository;
     }
 
     [HttpGet]
@@ -179,10 +182,19 @@ public class TicketsController : BaseController
 
             var messages = await _ticketMessageRepository.GetByTicketIdAsync(id);
 
+            var linkedTickets = new List<Ticket>();
+            foreach (var linkedId in ticket.LinkedTicketIds)
+            {
+                var linked = await _ticketRepository.GetAsync(linkedId);
+                if (linked != null && linked.CompanyId == companyId)
+                    linkedTickets.Add(linked);
+            }
+
             return Ok(new TicketDetailResponse
             {
                 Ticket = _mapper.Map<TicketResponse>(ticket),
-                Messages = _mapper.Map<List<TicketMessageResponse>>(messages)
+                Messages = _mapper.Map<List<TicketMessageResponse>>(messages),
+                LinkedTickets = _mapper.Map<List<TicketResponse>>(linkedTickets)
             });
         }
         catch (Exception ex)
@@ -354,6 +366,29 @@ public class TicketsController : BaseController
 
             _logger.LogInformation("Message added to ticket {TicketId}", id);
             await _auditService.LogAsync(companyId, ticket.ProjectId, commandModel.IsInternalNote ? "NoteAdded" : "ReplySent", "Ticket", id, _appUser);
+
+            // Auto-approve any pending Max draft_reply tasks on this ticket
+            // since the agent just sent a reply. Treats the send as approval.
+            if (!commandModel.IsInternalNote)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        var pendingTasks = await _maxTaskRepository.GetByTicketIdAsync(id);
+                        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                        foreach (var pt in pendingTasks.Where(t => t.Type == "draft_reply" && t.Status == "pending"))
+                        {
+                            pt.Status = "approved";
+                            pt.ApprovedByUserId = currentUser?.Id;
+                            pt.ResolvedOnDateTime = now;
+                            await _maxTaskRepository.UpdateAsync(pt);
+                        }
+                    }
+                    catch (Exception ex) { _logger.LogWarning(ex, "Failed to auto-approve Max draft_reply task for ticket {TicketId}", id); }
+                });
+            }
+
             return Ok(_mapper.Map<TicketMessageResponse>(created));
         }
         catch (Exception ex)

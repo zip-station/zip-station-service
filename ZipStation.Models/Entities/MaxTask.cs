@@ -57,4 +57,16 @@ public class MaxTaskDetails
 
     [BsonIgnoreIfNull]
     public string? QuestionId { get; set; }
+
+    /// <summary>
+    /// For link_to_story tasks: the kanban card number Max wants to link this ticket to.
+    /// </summary>
+    [BsonIgnoreIfNull]
+    public long? LinkToStoryCardNumber { get; set; }
+
+    /// <summary>
+    /// For link_to_story tasks: a human-readable label for the target story (its title).
+    /// </summary>
+    [BsonIgnoreIfNull]
+    public string? LinkToStoryTitle { get; set; }
 }
