@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Asp.Versioning;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
@@ -99,8 +100,25 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
-// --- Firebase JWT Authentication ---
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+// --- Authentication: Firebase JWT + Personal Access Tokens ---
+// A policy scheme inspects the bearer token format and forwards to either:
+//   - Pat handler (custom): tokens starting with "zs_pat_"
+//   - Firebase JWT bearer: everything else
+const string MultiAuthScheme = "ZipStationAuth";
+builder.Services.AddAuthentication(MultiAuthScheme)
+    .AddPolicyScheme(MultiAuthScheme, "Firebase JWT or PAT", options =>
+    {
+        options.ForwardDefaultSelector = context =>
+        {
+            var authHeader = context.Request.Headers.Authorization.ToString();
+            if (!string.IsNullOrEmpty(authHeader) &&
+                authHeader.StartsWith("Bearer " + ZipStation.Api.Helpers.PatAuthenticationHandler.TokenPrefix, StringComparison.Ordinal))
+            {
+                return ZipStation.Api.Helpers.PatAuthenticationHandler.SchemeName;
+            }
+            return JwtBearerDefaults.AuthenticationScheme;
+        };
+    })
     .AddJwtBearer(options =>
     {
         options.Authority = appConfig.Firebase.BearerTokenIssuer;
@@ -125,7 +143,9 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                 return Task.CompletedTask;
             }
         };
-    });
+    })
+    .AddScheme<AuthenticationSchemeOptions, ZipStation.Api.Helpers.PatAuthenticationHandler>(
+        ZipStation.Api.Helpers.PatAuthenticationHandler.SchemeName, _ => { });
 
 builder.Services.AddAuthorization();
 

@@ -114,6 +114,9 @@ public static class DependencyInjection
 
         builder.Services.AddScoped<IMaxTicketEnrichmentRepository>(sp =>
             new MaxTicketEnrichmentRepository(sp.GetRequiredService<IMongoDatabase>(), collections.MaxTicketEnrichments));
+
+        builder.Services.AddScoped<IPersonalAccessTokenRepository>(sp =>
+            new PersonalAccessTokenRepository(sp.GetRequiredService<IMongoDatabase>(), collections.PersonalAccessTokens));
     }
 
     private static void SetupGateways(WebApplicationBuilder builder)
@@ -130,6 +133,7 @@ public static class DependencyInjection
         builder.Services.AddScoped<IAlertGateway, AlertGateway>();
         builder.Services.AddScoped<IKanbanBoardGateway, KanbanBoardGateway>();
         builder.Services.AddScoped<IMaxGateway, MaxGateway>();
+        builder.Services.AddScoped<IPersonalAccessTokenGateway, PersonalAccessTokenGateway>();
     }
 
     private static void SetupServices(WebApplicationBuilder builder)

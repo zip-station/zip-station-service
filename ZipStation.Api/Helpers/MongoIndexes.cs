@@ -180,5 +180,16 @@ public static class MongoIndexes
                 new CreateIndexOptions { Unique = true }),
             new CreateIndexModel<MaxTicketEnrichment>(Builders<MaxTicketEnrichment>.IndexKeys.Ascending(e => e.ProjectId)),
         });
+
+        // Personal Access Tokens
+        var personalAccessTokens = database.GetCollection<PersonalAccessToken>(collections.PersonalAccessTokens);
+        await personalAccessTokens.Indexes.CreateManyAsync(new[]
+        {
+            new CreateIndexModel<PersonalAccessToken>(Builders<PersonalAccessToken>.IndexKeys.Ascending(t => t.TokenHash),
+                new CreateIndexOptions { Unique = true }),
+            new CreateIndexModel<PersonalAccessToken>(Builders<PersonalAccessToken>.IndexKeys.Combine(
+                Builders<PersonalAccessToken>.IndexKeys.Ascending(t => t.UserId),
+                Builders<PersonalAccessToken>.IndexKeys.Ascending(t => t.CompanyId))),
+        });
     }
 }
