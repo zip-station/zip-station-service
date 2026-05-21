@@ -25,6 +25,7 @@ public class MaxController : BaseController
     private readonly IMaxExampleReplyRepository _exampleReplyRepository;
     private readonly IMaxTaskRepository _taskRepository;
     private readonly ITicketRepository _ticketRepository;
+    private readonly IKanbanCardRepository _kanbanCardRepository;
     private readonly IProjectRepository _projectRepository;
     private readonly IUserRepository _userRepository;
     private readonly IAnthropicTestService _anthropicTestService;
@@ -40,6 +41,7 @@ public class MaxController : BaseController
         IMaxExampleReplyRepository exampleReplyRepository,
         IMaxTaskRepository taskRepository,
         ITicketRepository ticketRepository,
+        IKanbanCardRepository kanbanCardRepository,
         IProjectRepository projectRepository,
         IUserRepository userRepository,
         IAnthropicTestService anthropicTestService,
@@ -54,6 +56,7 @@ public class MaxController : BaseController
         _exampleReplyRepository = exampleReplyRepository;
         _taskRepository = taskRepository;
         _ticketRepository = ticketRepository;
+        _kanbanCardRepository = kanbanCardRepository;
         _projectRepository = projectRepository;
         _userRepository = userRepository;
         _anthropicTestService = anthropicTestService;
@@ -78,37 +81,72 @@ public class MaxController : BaseController
             if (pending.Count == 0)
                 return Ok(new List<MaxTaskWithTicketResponse>());
 
-            // Bulk load tickets so we can show ticket number + subject per task
-            var ticketIds = pending.Select(t => t.TicketId).Distinct().ToList();
-            var ticketCollection = _ticketRepository.GetCollection();
-            var ticketFilter = MongoDB.Driver.Builders<Models.Entities.Ticket>.Filter.In(t => t.Id, ticketIds)
-                             & MongoDB.Driver.Builders<Models.Entities.Ticket>.Filter.Eq(t => t.IsVoid, false);
-            var tickets = await ticketCollection.Find(ticketFilter).ToListAsync();
-            var ticketsById = tickets.ToDictionary(t => t.Id);
+            // Split pending tasks by what they target. A task with StoryId set is a
+            // story-side task; everything else is treated as a ticket-side task.
+            var storyTasks = pending.Where(t => !string.IsNullOrEmpty(t.StoryId)).ToList();
+            var ticketTasks = pending.Where(t => string.IsNullOrEmpty(t.StoryId) && !string.IsNullOrEmpty(t.TicketId)).ToList();
 
-            // Only show tasks for tickets the maintainer can still act on.
-            // Closed/Resolved/Merged/Abandoned tickets shouldn't have pending
-            // Max suggestions in the dashboard — they're stale.
-            var result = pending
-                .Where(t => ticketsById.ContainsKey(t.TicketId))
-                .Where(t =>
-                {
-                    var s = ticketsById[t.TicketId].Status;
-                    return s == Models.Enums.TicketStatus.Open || s == Models.Enums.TicketStatus.Pending;
-                })
-                .Select(t =>
-                {
-                    var ticket = ticketsById[t.TicketId];
-                    return new MaxTaskWithTicketResponse
+            var result = new List<MaxTaskWithTicketResponse>();
+
+            // ----- Ticket-side rows -----
+            if (ticketTasks.Count > 0)
+            {
+                var ticketIds = ticketTasks.Select(t => t.TicketId).Distinct().ToList();
+                var ticketCollection = _ticketRepository.GetCollection();
+                var ticketFilter = MongoDB.Driver.Builders<Models.Entities.Ticket>.Filter.In(t => t.Id, ticketIds)
+                                 & MongoDB.Driver.Builders<Models.Entities.Ticket>.Filter.Eq(t => t.IsVoid, false);
+                var tickets = await ticketCollection.Find(ticketFilter).ToListAsync();
+                var ticketsById = tickets.ToDictionary(t => t.Id);
+
+                result.AddRange(ticketTasks
+                    .Where(t => ticketsById.ContainsKey(t.TicketId))
+                    .Where(t =>
                     {
-                        Task = _mapper.Map<MaxTaskResponse>(t),
-                        TicketNumber = ticket.TicketNumber,
-                        TicketSubject = ticket.Subject,
-                        CustomerName = ticket.CustomerName,
-                        CustomerEmail = ticket.CustomerEmail,
-                    };
-                })
-                .ToList();
+                        // Closed/Resolved/Merged/Abandoned tickets shouldn't keep showing pending suggestions.
+                        var s = ticketsById[t.TicketId].Status;
+                        return s == Models.Enums.TicketStatus.Open || s == Models.Enums.TicketStatus.Pending;
+                    })
+                    .Select(t =>
+                    {
+                        var ticket = ticketsById[t.TicketId];
+                        return new MaxTaskWithTicketResponse
+                        {
+                            Task = _mapper.Map<MaxTaskResponse>(t),
+                            TicketNumber = ticket.TicketNumber,
+                            TicketSubject = ticket.Subject,
+                            CustomerName = ticket.CustomerName,
+                            CustomerEmail = ticket.CustomerEmail,
+                        };
+                    }));
+            }
+
+            // ----- Story-side rows -----
+            if (storyTasks.Count > 0)
+            {
+                var storyIds = storyTasks.Select(t => t.StoryId!).Distinct().ToList();
+                var cardCollection = _kanbanCardRepository.GetCollection();
+                var cardFilter = MongoDB.Driver.Builders<Models.Entities.KanbanCard>.Filter.In(c => c.Id, storyIds)
+                               & MongoDB.Driver.Builders<Models.Entities.KanbanCard>.Filter.Eq(c => c.IsVoid, false);
+                var cards = await cardCollection.Find(cardFilter).ToListAsync();
+                var cardsById = cards.ToDictionary(c => c.Id);
+
+                result.AddRange(storyTasks
+                    .Where(t => cardsById.ContainsKey(t.StoryId!))
+                    .Select(t =>
+                    {
+                        var card = cardsById[t.StoryId!];
+                        return new MaxTaskWithTicketResponse
+                        {
+                            Task = _mapper.Map<MaxTaskResponse>(t),
+                            StoryCardNumber = card.CardNumber,
+                            StoryTitle = card.Title,
+                        };
+                    }));
+            }
+
+            // Most recent first (already the per-bucket order; merge keeps stable per side
+            // but sort the combined list so the maintainer sees newest signals on top).
+            result = result.OrderByDescending(r => r.Task.CreatedOnDateTime).ToList();
 
             return Ok(result);
         }

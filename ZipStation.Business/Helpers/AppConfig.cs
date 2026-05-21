@@ -52,6 +52,7 @@ public class ZipStationMongoDbCollections
     public string MaxTasks { get; set; } = "maxTasks";
     public string MaxQuestions { get; set; } = "maxQuestions";
     public string MaxTicketEnrichments { get; set; } = "maxTicketEnrichments";
+    public string MaxStoryEnrichments { get; set; } = "maxStoryEnrichments";
     public string PersonalAccessTokens { get; set; } = "personalAccessTokens";
 }
 

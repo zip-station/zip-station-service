@@ -7,8 +7,10 @@ public interface IMaxQuestionRepository : IBaseRepository<MaxQuestion>
 {
     Task<List<MaxQuestion>> GetByProjectIdAsync(string projectId);
     Task<List<MaxQuestion>> GetByTicketIdAsync(string ticketId);
+    Task<List<MaxQuestion>> GetByStoryIdAsync(string storyId);
     Task<List<MaxQuestion>> GetPendingByProjectIdAsync(string projectId);
     Task<long> SoftDeletePendingByTicketIdAsync(string ticketId);
+    Task<long> SoftDeletePendingByStoryIdAsync(string storyId);
 }
 
 public class MaxQuestionRepository : BaseRepository<MaxQuestion>, IMaxQuestionRepository
@@ -49,6 +51,27 @@ public class MaxQuestionRepository : BaseRepository<MaxQuestion>, IMaxQuestionRe
     public async Task<long> SoftDeletePendingByTicketIdAsync(string ticketId)
     {
         var filter = Builders<MaxQuestion>.Filter.Eq(q => q.SourceTicketId, ticketId)
+                   & Builders<MaxQuestion>.Filter.Eq(q => q.Status, "pending")
+                   & Builders<MaxQuestion>.Filter.Eq(q => q.IsVoid, false);
+        var update = Builders<MaxQuestion>.Update
+            .Set(q => q.IsVoid, true)
+            .Set(q => q.UpdatedOnDateTime, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        var result = await _Collection.UpdateManyAsync(filter, update);
+        return result.ModifiedCount;
+    }
+
+    public async Task<List<MaxQuestion>> GetByStoryIdAsync(string storyId)
+    {
+        var filter = Builders<MaxQuestion>.Filter.Eq(q => q.SourceStoryId, storyId)
+                   & Builders<MaxQuestion>.Filter.Eq(q => q.IsVoid, false);
+        return await _Collection.Find(filter)
+            .SortByDescending(q => q.CreatedOnDateTime)
+            .ToListAsync();
+    }
+
+    public async Task<long> SoftDeletePendingByStoryIdAsync(string storyId)
+    {
+        var filter = Builders<MaxQuestion>.Filter.Eq(q => q.SourceStoryId, storyId)
                    & Builders<MaxQuestion>.Filter.Eq(q => q.Status, "pending")
                    & Builders<MaxQuestion>.Filter.Eq(q => q.IsVoid, false);
         var update = Builders<MaxQuestion>.Update

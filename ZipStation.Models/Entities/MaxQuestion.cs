@@ -14,6 +14,9 @@ public class MaxQuestion : BaseEntity
     [BsonIgnoreIfNull]
     public string? SourceTicketId { get; set; }
 
+    [BsonIgnoreIfNull]
+    public string? SourceStoryId { get; set; }
+
     [DoNotClearOnPatch]
     public string Question { get; set; } = string.Empty;
 

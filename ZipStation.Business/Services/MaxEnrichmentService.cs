@@ -333,9 +333,15 @@ public class MaxEnrichmentService : IMaxEnrichmentService
                 details.Notes = action?.Notes;
                 break;
             case "add_to_backlog":
-                details.SuggestedTitle = !string.IsNullOrWhiteSpace(action?.Notes) ? action.Notes : enrichment.Summary;
+                // `action.Notes` is documented in the prompt as the kanban title text only,
+                // but defensive: strip any label-prefix Max occasionally tacks on.
+                var rawTitle = !string.IsNullOrWhiteSpace(action?.Notes) ? action.Notes : enrichment.Summary;
+                details.SuggestedTitle = StripTitlePrefix(rawTitle);
                 details.SuggestedKanbanType = MapCategoryToKanbanType(enrichment.Category);
-                details.Notes = action?.Notes;
+                // Don't reuse the title as Notes — the kanban card builder uses Notes as the
+                // card description, which would just duplicate the title into the body. The
+                // linked ticket is one click away for full context.
+                details.Notes = null;
                 break;
             case "link_to_story":
                 if (action?.CardNumber == null) return; // can't act without a target
@@ -378,6 +384,20 @@ public class MaxEnrichmentService : IMaxEnrichmentService
         "feature_request" => "Feature",
         _ => "Improvement",
     };
+
+    /// Strip any of `Kanban title:`, `Title:`, `Card title:`, `Card:` (case-insensitive)
+    /// prefixes that Max occasionally writes despite prompt instructions. Defensive only —
+    /// the prompt is the primary guard.
+    private static readonly System.Text.RegularExpressions.Regex _titlePrefixPattern = new(
+        @"^\s*(kanban\s*title|card\s*title|title|card|kanban)\s*[:\-]\s*",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static string StripTitlePrefix(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
+        var stripped = _titlePrefixPattern.Replace(raw.Trim(), "").Trim();
+        return string.IsNullOrWhiteSpace(stripped) ? raw.Trim() : stripped;
+    }
 
     private static bool MentionsEmDashes(string? toneAvoid)
     {
@@ -491,7 +511,7 @@ public class MaxEnrichmentService : IMaxEnrichmentService
         sb.AppendLine("- draft_reply: you can write a useful response. Include the draft.");
         sb.AppendLine("- investigate: bug needing maintainer's eyes on code. Include investigation hints in notes.");
         sb.AppendLine("- merge_duplicate: `duplicate_of` is set AND the customer emails match. Send a thanks/tracked-here ack.");
-        sb.AppendLine("- add_to_backlog: feature request worth tracking, OR a recurring bug pattern that has NO existing kanban story. Include a kanban-suitable title in notes.");
+        sb.AppendLine("- add_to_backlog: feature request worth tracking, OR a recurring bug pattern that has NO existing kanban story. Set `notes` to the kanban card title **and nothing else** — 5-12 words, short imperative or noun phrase (e.g. \"Fix login redirect on mobile\"). Do NOT prefix the value with labels like \"Kanban title:\", \"Title:\", or \"Card:\". The notes string is used verbatim as the card's title.");
         sb.AppendLine("- link_to_story: an existing non-Done kanban story in `<available_stories>` already covers this issue. Set `card_number` to the matching story's cardNumber. Prefer this over add_to_backlog whenever a matching story exists.");
         sb.AppendLine("- no_action: spam, off-topic, or feedback that needs no response.");
         sb.AppendLine("- escalated: ambiguous, emotionally charged, legal/safety/refund disputes, or confidence below 0.5.");

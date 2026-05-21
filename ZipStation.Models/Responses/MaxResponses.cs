@@ -70,6 +70,7 @@ public class MaxTaskResponse
 {
     public string Id { get; set; } = string.Empty;
     public string TicketId { get; set; } = string.Empty;
+    public string? StoryId { get; set; }
     public string Type { get; set; } = string.Empty;
     public string Status { get; set; } = "pending";
     public double Confidence { get; set; }
@@ -88,12 +89,16 @@ public class MaxTaskDetailsResponse
     public string? QuestionId { get; set; }
     public long? LinkToStoryCardNumber { get; set; }
     public string? LinkToStoryTitle { get; set; }
+    public string? DuplicateOfStoryId { get; set; }
+    public long? DuplicateOfStoryCardNumber { get; set; }
+    public string? DuplicateOfStoryTitle { get; set; }
 }
 
 public class MaxQuestionResponse
 {
     public string Id { get; set; } = string.Empty;
     public string? SourceTicketId { get; set; }
+    public string? SourceStoryId { get; set; }
     public string Question { get; set; } = string.Empty;
     public string? ContextExcerpt { get; set; }
     public string Status { get; set; } = "pending";
@@ -110,13 +115,45 @@ public class TicketMaxResponse
     public List<MaxQuestionResponse> Questions { get; set; } = new();
 }
 
+public class MaxStoryEnrichmentResponse
+{
+    public string Id { get; set; } = string.Empty;
+    public string StoryId { get; set; } = string.Empty;
+    public string Status { get; set; } = "complete";
+    public string Category { get; set; } = "unclear";
+    public string Summary { get; set; } = string.Empty;
+    public double Confidence { get; set; }
+    public string? DuplicateOfStoryId { get; set; }
+    public List<string> RelatedStoryIds { get; set; } = new();
+    public List<string> Tags { get; set; } = new();
+    public string SuggestedActionType { get; set; } = "no_action";
+    public string? SuggestedNotes { get; set; }
+    public string? Reasoning { get; set; }
+    public bool FlaggedQuestion { get; set; }
+    public string? QuestionId { get; set; }
+    public string Model { get; set; } = string.Empty;
+    public long CreatedOnDateTime { get; set; }
+    public long UpdatedOnDateTime { get; set; }
+}
+
+public class StoryMaxResponse
+{
+    public MaxStoryEnrichmentResponse? Enrichment { get; set; }
+    public List<MaxTaskResponse> Tasks { get; set; } = new();
+    public List<MaxQuestionResponse> Questions { get; set; } = new();
+}
+
 public class MaxTaskWithTicketResponse
 {
     public MaxTaskResponse Task { get; set; } = new();
-    public long TicketNumber { get; set; }
-    public string TicketSubject { get; set; } = string.Empty;
+    /// One of (TicketNumber, TicketSubject, CustomerName/Email) — when the underlying task targets a ticket.
+    public long? TicketNumber { get; set; }
+    public string? TicketSubject { get; set; }
     public string? CustomerName { get; set; }
     public string? CustomerEmail { get; set; }
+    /// One of (StoryCardNumber, StoryTitle) — when the underlying task targets a kanban story.
+    public long? StoryCardNumber { get; set; }
+    public string? StoryTitle { get; set; }
 }
 
 public class MaxToneAnalyzerResponse

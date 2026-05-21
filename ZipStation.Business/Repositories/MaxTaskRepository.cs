@@ -6,8 +6,10 @@ namespace ZipStation.Business.Repositories;
 public interface IMaxTaskRepository : IBaseRepository<MaxTask>
 {
     Task<List<MaxTask>> GetByTicketIdAsync(string ticketId);
+    Task<List<MaxTask>> GetByStoryIdAsync(string storyId);
     Task<List<MaxTask>> GetPendingByProjectIdAsync(string projectId);
     Task<long> SoftDeletePendingByTicketIdAsync(string ticketId);
+    Task<long> SoftDeletePendingByStoryIdAsync(string storyId);
 }
 
 public class MaxTaskRepository : BaseRepository<MaxTask>, IMaxTaskRepository
@@ -39,6 +41,27 @@ public class MaxTaskRepository : BaseRepository<MaxTask>, IMaxTaskRepository
     public async Task<long> SoftDeletePendingByTicketIdAsync(string ticketId)
     {
         var filter = Builders<MaxTask>.Filter.Eq(t => t.TicketId, ticketId)
+                   & Builders<MaxTask>.Filter.Eq(t => t.Status, "pending")
+                   & Builders<MaxTask>.Filter.Eq(t => t.IsVoid, false);
+        var update = Builders<MaxTask>.Update
+            .Set(t => t.IsVoid, true)
+            .Set(t => t.UpdatedOnDateTime, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        var result = await _Collection.UpdateManyAsync(filter, update);
+        return result.ModifiedCount;
+    }
+
+    public async Task<List<MaxTask>> GetByStoryIdAsync(string storyId)
+    {
+        var filter = Builders<MaxTask>.Filter.Eq(t => t.StoryId, storyId)
+                   & Builders<MaxTask>.Filter.Eq(t => t.IsVoid, false);
+        return await _Collection.Find(filter)
+            .SortByDescending(t => t.CreatedOnDateTime)
+            .ToListAsync();
+    }
+
+    public async Task<long> SoftDeletePendingByStoryIdAsync(string storyId)
+    {
+        var filter = Builders<MaxTask>.Filter.Eq(t => t.StoryId, storyId)
                    & Builders<MaxTask>.Filter.Eq(t => t.Status, "pending")
                    & Builders<MaxTask>.Filter.Eq(t => t.IsVoid, false);
         var update = Builders<MaxTask>.Update

@@ -14,6 +14,7 @@ public class KanbanMappingProfile : Profile
 
         CreateMap<KanbanCardCommandModel, KanbanCard>();
         CreateMap<KanbanCard, KanbanCardResponse>();
+        CreateMap<KanbanCardExternalSource, KanbanCardExternalSourceResponse>();
 
         CreateMap<KanbanCardCommentCommandModel, KanbanCardComment>();
         CreateMap<KanbanCardComment, KanbanCardCommentResponse>();

@@ -301,6 +301,15 @@ public class TicketMaxController : BaseController
         if (!Enum.TryParse<KanbanCardType>(typeName, ignoreCase: true, out var cardType))
             cardType = KanbanCardType.Improvement;
 
+        // Defense in depth — older pending tasks (from before the prompt fix) may still have
+        // a `Kanban title:` prefix saved on disk.
+        var title = StripTitlePrefix(task.Details.SuggestedTitle) ?? ticket.Subject;
+
+        // The card's description used to default to the same string as the title, which
+        // duplicated it. Now we use a brief "From ticket #N: <subject>" reference; the linked
+        // ticket is available via the LinkedTickets section for full context.
+        var descriptionHtml = $"<p><em>From ticket #{ticket.TicketNumber}: {System.Net.WebUtility.HtmlEncode(ticket.Subject)}</em></p>";
+
         var card = new KanbanCard
         {
             CompanyId = ticket.CompanyId,
@@ -309,8 +318,8 @@ public class TicketMaxController : BaseController
             CardNumber = cardNumber,
             ColumnId = columnId,
             Position = maxPos + PositionStep,
-            Title = task.Details.SuggestedTitle ?? ticket.Subject,
-            DescriptionHtml = !string.IsNullOrWhiteSpace(task.Details.Notes) ? $"<p>{System.Net.WebUtility.HtmlEncode(task.Details.Notes)}</p>" : null,
+            Title = title,
+            DescriptionHtml = descriptionHtml,
             Type = cardType,
             Priority = TicketPriority.Normal,
             Tags = new List<string>(),
@@ -340,6 +349,20 @@ public class TicketMaxController : BaseController
 
         await _auditService.LogAsync(ticket.CompanyId, ticket.ProjectId, "LinkedTicketToStory", "KanbanCard", card.Id, _appUser, $"Linked ticket #{ticket.TicketNumber} via Max suggestion");
         return (true, "");
+    }
+
+    /// Strip label prefixes ("Kanban title:", "Title:", etc.) that Max occasionally writes into
+    /// the title text. Mirrors the sanitizer in MaxEnrichmentService so older stored tasks still
+    /// clean up at approval time.
+    private static readonly System.Text.RegularExpressions.Regex _titlePrefixPattern = new(
+        @"^\s*(kanban\s*title|card\s*title|title|card|kanban)\s*[:\-]\s*",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static string? StripTitlePrefix(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return raw;
+        var stripped = _titlePrefixPattern.Replace(raw.Trim(), "").Trim();
+        return string.IsNullOrWhiteSpace(stripped) ? raw.Trim() : stripped;
     }
 
     private async Task<KanbanBoard> GetOrCreateBoardAsync(string companyId, string projectId)
