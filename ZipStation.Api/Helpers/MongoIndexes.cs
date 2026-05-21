@@ -128,6 +128,7 @@ public static class MongoIndexes
                 Builders<KanbanCard>.IndexKeys.Ascending(c => c.ProjectId),
                 Builders<KanbanCard>.IndexKeys.Ascending(c => c.CardNumber))),
             new CreateIndexModel<KanbanCard>(Builders<KanbanCard>.IndexKeys.Ascending(c => c.LinkedTicketIds)),
+            new CreateIndexModel<KanbanCard>(Builders<KanbanCard>.IndexKeys.Ascending(c => c.LinkedStoryIds)),
             new CreateIndexModel<KanbanCard>(Builders<KanbanCard>.IndexKeys.Ascending(c => c.AssignedToUserId)),
         });
 

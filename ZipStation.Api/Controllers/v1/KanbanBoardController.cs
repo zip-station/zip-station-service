@@ -337,9 +337,12 @@ public class KanbanBoardController : BaseController
 
             var comments = await _commentRepository.GetByCardIdAsync(card.Id);
             var linkedTickets = await LoadLinkedTicketsAsync(card.LinkedTicketIds, companyId);
+            var linkedStories = await LoadLinkedStoriesAsync(card.LinkedStoryIds, companyId);
 
             var project = await _projectRepository.GetAsync(projectId);
             var fileStorage = project?.Settings?.FileStorage;
+            var board = await _boardRepository.GetByProjectIdAsync(projectId);
+            var columnNamesById = board?.Columns.ToDictionary(c => c.Id, c => c.Name) ?? new Dictionary<string, string>();
 
             var cardResponse = _mapper.Map<KanbanCardResponse>(card);
             cardResponse.DescriptionHtml = RefreshImageUrls(cardResponse.DescriptionHtml, fileStorage);
@@ -348,11 +351,25 @@ public class KanbanBoardController : BaseController
             foreach (var c in commentResponses)
                 c.BodyHtml = RefreshImageUrls(c.BodyHtml, fileStorage) ?? string.Empty;
 
+            var linkedStorySummaries = linkedStories.Select(s => new KanbanStorySummaryResponse
+            {
+                Id = s.Id,
+                ProjectId = s.ProjectId,
+                CardNumber = s.CardNumber,
+                Title = s.Title,
+                Type = s.Type,
+                Priority = s.Priority,
+                ColumnId = s.ColumnId,
+                ColumnName = columnNamesById.TryGetValue(s.ColumnId, out var cn) ? cn : null,
+                AssignedToUserId = s.AssignedToUserId,
+            }).ToList();
+
             return Ok(new KanbanCardDetailResponse
             {
                 Card = cardResponse,
                 Comments = commentResponses,
                 LinkedTickets = _mapper.Map<List<TicketResponse>>(linkedTickets),
+                LinkedStories = linkedStorySummaries,
             });
         }
         catch (Exception ex)
@@ -619,6 +636,141 @@ public class KanbanBoardController : BaseController
         }
     }
 
+    // ----- Linked stories -----
+
+    [HttpPost("cards/{id}/link-story")]
+    [MapToApiVersion("1.0")]
+    [ProducesResponseType(typeof(KanbanCardResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> LinkStory(string companyId, string projectId, string id, [FromBody] LinkKanbanStoryRequest request)
+    {
+        try
+        {
+            var gw = await _gateway.CanEditAsync(companyId, projectId);
+            if (gw.ResponseStatus != GatewayResponseCodes.Ok) return ProcessGatewayResponse(gw);
+
+            var card = await _cardRepository.GetAsync(id);
+            if (card == null || card.CompanyId != companyId || card.ProjectId != projectId) return NotFound();
+
+            var target = await ResolveCardAsync(projectId, request.CardIdOrNumber);
+            if (target == null)
+                return BadRequest(new BadRequestResponse { Message = "Story not found. Enter a card number (e.g. 42) or ID." });
+            if (target.Id == card.Id)
+                return BadRequest(new BadRequestResponse { Message = "Can't link a story to itself." });
+
+            if (!card.LinkedStoryIds.Contains(target.Id))
+            {
+                card.LinkedStoryIds.Add(target.Id);
+                await _cardRepository.UpdateAsync(card);
+            }
+
+            return Ok(_mapper.Map<KanbanCardResponse>(card));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error linking story to kanban card {CardId}", id);
+            return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
+        }
+    }
+
+    [HttpDelete("cards/{id}/link-story/{otherCardId}")]
+    [MapToApiVersion("1.0")]
+    [ProducesResponseType(typeof(KanbanCardResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> UnlinkStory(string companyId, string projectId, string id, string otherCardId)
+    {
+        try
+        {
+            var gw = await _gateway.CanEditAsync(companyId, projectId);
+            if (gw.ResponseStatus != GatewayResponseCodes.Ok) return ProcessGatewayResponse(gw);
+
+            var card = await _cardRepository.GetAsync(id);
+            if (card == null || card.CompanyId != companyId || card.ProjectId != projectId) return NotFound();
+
+            if (card.LinkedStoryIds.Remove(otherCardId))
+                await _cardRepository.UpdateAsync(card);
+
+            return Ok(_mapper.Map<KanbanCardResponse>(card));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error unlinking story from kanban card {CardId}", id);
+            return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
+        }
+    }
+
+    // ----- External sources (manual link to Discord posts etc.) -----
+
+    [HttpPost("cards/{id}/external-source")]
+    [MapToApiVersion("1.0")]
+    [ProducesResponseType(typeof(KanbanCardResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> AddExternalSource(string companyId, string projectId, string id, [FromBody] AddExternalSourceRequest request)
+    {
+        try
+        {
+            var gw = await _gateway.CanEditAsync(companyId, projectId);
+            if (gw.ResponseStatus != GatewayResponseCodes.Ok) return ProcessGatewayResponse(gw);
+
+            var card = await _cardRepository.GetAsync(id);
+            if (card == null || card.CompanyId != companyId || card.ProjectId != projectId) return NotFound();
+
+            var url = (request.Url ?? "").Trim();
+            if (string.IsNullOrEmpty(url))
+                return BadRequest(new BadRequestResponse { Message = "Paste a URL to link." });
+
+            var parsed = ParseExternalSourceUrl(url);
+            if (parsed == null)
+                return BadRequest(new BadRequestResponse { Message = "Couldn't recognize that URL. v1 supports Discord links (https://discord.com/channels/…)." });
+
+            // Dedup by (type, messageId) — same key as Discord poll idempotency.
+            if (card.ExternalSources.Any(s => s.Type == parsed.Type
+                && !string.IsNullOrEmpty(parsed.MessageId)
+                && string.Equals(s.MessageId, parsed.MessageId, StringComparison.Ordinal)))
+            {
+                return Ok(_mapper.Map<KanbanCardResponse>(card)); // idempotent: already linked
+            }
+
+            card.ExternalSources.Add(parsed);
+            await _cardRepository.UpdateAsync(card);
+            await _auditService.LogAsync(companyId, projectId, "ExternalSourceLinked", "KanbanCard", card.Id, _appUser, parsed.Url);
+
+            return Ok(_mapper.Map<KanbanCardResponse>(card));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error adding external source to kanban card {CardId}", id);
+            return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
+        }
+    }
+
+    [HttpDelete("cards/{id}/external-source/{messageId}")]
+    [MapToApiVersion("1.0")]
+    [ProducesResponseType(typeof(KanbanCardResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> RemoveExternalSource(string companyId, string projectId, string id, string messageId)
+    {
+        try
+        {
+            var gw = await _gateway.CanEditAsync(companyId, projectId);
+            if (gw.ResponseStatus != GatewayResponseCodes.Ok) return ProcessGatewayResponse(gw);
+
+            var card = await _cardRepository.GetAsync(id);
+            if (card == null || card.CompanyId != companyId || card.ProjectId != projectId) return NotFound();
+
+            var before = card.ExternalSources.Count;
+            card.ExternalSources.RemoveAll(s => string.Equals(s.MessageId, messageId, StringComparison.Ordinal));
+            if (card.ExternalSources.Count != before)
+            {
+                await _cardRepository.UpdateAsync(card);
+                await _auditService.LogAsync(companyId, projectId, "ExternalSourceUnlinked", "KanbanCard", card.Id, _appUser, messageId);
+            }
+
+            return Ok(_mapper.Map<KanbanCardResponse>(card));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error removing external source from kanban card {CardId}", id);
+            return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
+        }
+    }
+
     // ----- Helpers -----
 
     private async Task<KanbanBoard> GetOrCreateBoardAsync(string companyId, string projectId)
@@ -667,6 +819,73 @@ public class KanbanBoardController : BaseController
                 result.Add(ticket);
         }
         return result;
+    }
+
+    /// Match Discord URL forms:
+    ///   - https://discord.com/channels/{guild}/{x}           (2 segments — x is a thread or channel id)
+    ///   - https://discord.com/channels/{guild}/{channel}/{m} (3 segments — full message URL)
+    /// Also tolerates discordapp.com (legacy) and ptb./canary. subdomains.
+    private static readonly System.Text.RegularExpressions.Regex _discordUrlPattern = new(
+        @"^https?://(?:[a-z]+\.)?discord(?:app)?\.com/channels/(\d+)/(\d+)(?:/(\d+))?/?(?:\?.*)?$",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// Parse a pasted URL into a KanbanCardExternalSource. Returns null when the URL isn't
+    /// a recognized source type — caller surfaces a friendly error to the SPA.
+    private static KanbanCardExternalSource? ParseExternalSourceUrl(string url)
+    {
+        var m = _discordUrlPattern.Match(url);
+        if (!m.Success) return null;
+
+        var guildId = m.Groups[1].Value;
+        var second = m.Groups[2].Value;
+        var third = m.Groups[3].Success ? m.Groups[3].Value : null;
+
+        // 3-segment = full message URL; 2-segment = thread URL (most common forum case).
+        // We can't distinguish a thread from a regular channel without an API call, so we
+        // optimistically treat the 2-segment form as a forum thread (where threadId == starter messageId).
+        var channelId = third != null ? second : (string?)null;
+        var threadId = third != null ? second : second;
+        var messageId = third ?? second;
+
+        return new KanbanCardExternalSource
+        {
+            Type = ExternalSourceType.Discord,
+            Url = url,
+            GuildId = guildId,
+            ChannelId = channelId,
+            ThreadId = threadId,
+            MessageId = messageId,
+            ForumTags = new List<string>(),
+        };
+    }
+
+    private async Task<List<KanbanCard>> LoadLinkedStoriesAsync(List<string> cardIds, string companyId)
+    {
+        // Skip self-references / already-voided cards. Stale ids are tolerated silently —
+        // they accumulate when the maintainer deletes a referenced card, and re-linking
+        // would be more annoying than just hiding them.
+        var result = new List<KanbanCard>();
+        foreach (var cid in cardIds.Distinct())
+        {
+            var card = await _cardRepository.GetAsync(cid);
+            if (card != null && !card.IsVoid && card.CompanyId == companyId)
+                result.Add(card);
+        }
+        return result;
+    }
+
+    private async Task<KanbanCard?> ResolveCardAsync(string projectId, string idOrNumber)
+    {
+        if (string.IsNullOrWhiteSpace(idOrNumber)) return null;
+        var trimmed = idOrNumber.Trim().TrimStart('#').TrimStart('S', 's').TrimStart('T', 't').TrimStart('R', 'r').TrimStart('-');
+        if (long.TryParse(trimmed, out var num) && num > 0)
+        {
+            var byNum = await _cardRepository.GetByCardNumberAsync(projectId, num);
+            if (byNum != null) return byNum;
+        }
+        // Fall back to literal id lookup.
+        var byId = await _cardRepository.GetAsync(idOrNumber.Trim());
+        return byId;
     }
 
     private string? RefreshImageUrls(string? html, FileStorageSettings? settings)
@@ -788,6 +1007,19 @@ public class AddKanbanCardCommentRequest
 public class LinkKanbanTicketRequest
 {
     public string TicketIdOrNumber { get; set; } = string.Empty;
+}
+
+public class LinkKanbanStoryRequest
+{
+    /// Either the target card's id (24-hex ObjectId) or its card number (numeric string).
+    public string CardIdOrNumber { get; set; } = string.Empty;
+}
+
+public class AddExternalSourceRequest
+{
+    /// A URL pointing at the external resource. v1 only recognizes Discord URLs;
+    /// unrecognized patterns are rejected so we can grow the parser per source type.
+    public string Url { get; set; } = string.Empty;
 }
 
 public class KanbanImageUploadResponse
