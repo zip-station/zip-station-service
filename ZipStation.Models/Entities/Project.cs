@@ -54,6 +54,40 @@ public class ProjectSettings
     public FileStorageSettings? FileStorage { get; set; }
 
     public MaxSettings? Max { get; set; }
+
+    public DiscordSettings? Discord { get; set; }
+}
+
+public class DiscordSettings
+{
+    public bool Enabled { get; set; }
+
+    public string BotTokenEncrypted { get; set; } = string.Empty;
+
+    public List<DiscordSource> Sources { get; set; } = new();
+}
+
+public class DiscordSource
+{
+    public string Id { get; set; } = MongoDB.Bson.ObjectId.GenerateNewId().ToString();
+
+    public string Name { get; set; } = string.Empty;
+
+    public string GuildId { get; set; } = string.Empty;
+
+    public string ChannelId { get; set; } = string.Empty;
+
+    public bool IsForum { get; set; } = true;
+
+    /// Highest snowflake ID already turned into a story. Cursors forward as new threads/messages arrive.
+    public string? LastSeenId { get; set; }
+
+    /// Default card type for cards created from this source. Null means "let Max decide".
+    /// When Max is disabled or its call fails the worker falls back to Bug.
+    [BsonIgnoreIfNull]
+    public KanbanCardType? DefaultCardType { get; set; }
+
+    public bool Enabled { get; set; } = true;
 }
 
 public class MaxSettings

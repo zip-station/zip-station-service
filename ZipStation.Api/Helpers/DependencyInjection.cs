@@ -115,6 +115,9 @@ public static class DependencyInjection
         builder.Services.AddScoped<IMaxTicketEnrichmentRepository>(sp =>
             new MaxTicketEnrichmentRepository(sp.GetRequiredService<IMongoDatabase>(), collections.MaxTicketEnrichments));
 
+        builder.Services.AddScoped<IMaxStoryEnrichmentRepository>(sp =>
+            new MaxStoryEnrichmentRepository(sp.GetRequiredService<IMongoDatabase>(), collections.MaxStoryEnrichments));
+
         builder.Services.AddScoped<IPersonalAccessTokenRepository>(sp =>
             new PersonalAccessTokenRepository(sp.GetRequiredService<IMongoDatabase>(), collections.PersonalAccessTokens));
     }
@@ -133,6 +136,7 @@ public static class DependencyInjection
         builder.Services.AddScoped<IAlertGateway, AlertGateway>();
         builder.Services.AddScoped<IKanbanBoardGateway, KanbanBoardGateway>();
         builder.Services.AddScoped<IMaxGateway, MaxGateway>();
+        builder.Services.AddScoped<IDiscordGateway, DiscordGateway>();
         builder.Services.AddScoped<IPersonalAccessTokenGateway, PersonalAccessTokenGateway>();
     }
 
@@ -148,7 +152,9 @@ public static class DependencyInjection
         builder.Services.AddSingleton<IFileStorageService, FileStorageService>();
         builder.Services.AddSingleton<IRateLimiter, InMemoryRateLimiter>();
         builder.Services.AddSingleton<IAnthropicTestService, AnthropicTestService>();
+        builder.Services.AddSingleton<IDiscordApiClient, DiscordApiClient>();
         builder.Services.AddScoped<IMaxEnrichmentService, MaxEnrichmentService>();
+        builder.Services.AddScoped<IMaxStoryEnrichmentService, MaxStoryEnrichmentService>();
         builder.Services.AddScoped<IMaxToneAnalyzerService, MaxToneAnalyzerService>();
     }
 }

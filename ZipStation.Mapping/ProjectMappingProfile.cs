@@ -23,5 +23,8 @@ public class ProjectMappingProfile : Profile
         CreateMap<SpamSettings, SpamSettingsResponse>();
         CreateMap<FileStorageSettings, FileStorageSettingsResponse>()
             .ForMember(d => d.HasCredentials, o => o.MapFrom(s => !string.IsNullOrEmpty(s.AppKey)));
+        CreateMap<DiscordSettings, DiscordSettingsResponse>()
+            .ForMember(d => d.BotTokenSet, o => o.MapFrom(s => !string.IsNullOrEmpty(s.BotTokenEncrypted)));
+        CreateMap<DiscordSource, DiscordSourceResponse>();
     }
 }

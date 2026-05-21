@@ -31,6 +31,41 @@ public class ProjectSettingsResponse
     public ContactFormSettingsResponse? ContactForm { get; set; }
     public FileStorageSettingsResponse? FileStorage { get; set; }
     public MaxSettingsResponse? Max { get; set; }
+    public DiscordSettingsResponse? Discord { get; set; }
+}
+
+public class DiscordSettingsResponse
+{
+    public bool Enabled { get; set; }
+    public bool BotTokenSet { get; set; }
+    public List<DiscordSourceResponse> Sources { get; set; } = new();
+}
+
+public class DiscordSourceResponse
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string GuildId { get; set; } = string.Empty;
+    public string ChannelId { get; set; } = string.Empty;
+    public bool IsForum { get; set; }
+    public KanbanCardType? DefaultCardType { get; set; }
+    public bool Enabled { get; set; }
+}
+
+public class DiscordGuildSummaryResponse
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string? IconUrl { get; set; }
+}
+
+public class DiscordChannelSummaryResponse
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public int Type { get; set; }
+    public string? ParentId { get; set; }
+    public bool IsForum { get; set; }
 }
 
 public class EmailSignatureSettingsResponse
