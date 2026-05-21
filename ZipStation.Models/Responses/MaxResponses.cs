@@ -156,6 +156,24 @@ public class MaxTaskWithTicketResponse
     public string? StoryTitle { get; set; }
 }
 
+public class MaxQuestionWithSourceResponse
+{
+    public MaxQuestionResponse Question { get; set; } = new();
+    /// "ticket" or "story" — distinguishes which side the question came from.
+    public string SourceType { get; set; } = string.Empty;
+    public long? TicketNumber { get; set; }
+    public string? TicketSubject { get; set; }
+    public string? CustomerName { get; set; }
+    public long? StoryCardNumber { get; set; }
+    public string? StoryTitle { get; set; }
+}
+
+public class MaxQuestionAnswerRequest
+{
+    public string Answer { get; set; } = string.Empty;
+    public bool PromoteToContext { get; set; }
+}
+
 public class MaxToneAnalyzerResponse
 {
     public string? ToneGuide { get; set; }

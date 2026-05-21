@@ -24,6 +24,7 @@ public class MaxController : BaseController
     private readonly IMaxInstructionRepository _instructionRepository;
     private readonly IMaxExampleReplyRepository _exampleReplyRepository;
     private readonly IMaxTaskRepository _taskRepository;
+    private readonly IMaxQuestionRepository _questionRepository;
     private readonly ITicketRepository _ticketRepository;
     private readonly IKanbanCardRepository _kanbanCardRepository;
     private readonly IProjectRepository _projectRepository;
@@ -40,6 +41,7 @@ public class MaxController : BaseController
         IMaxInstructionRepository instructionRepository,
         IMaxExampleReplyRepository exampleReplyRepository,
         IMaxTaskRepository taskRepository,
+        IMaxQuestionRepository questionRepository,
         ITicketRepository ticketRepository,
         IKanbanCardRepository kanbanCardRepository,
         IProjectRepository projectRepository,
@@ -55,6 +57,7 @@ public class MaxController : BaseController
         _instructionRepository = instructionRepository;
         _exampleReplyRepository = exampleReplyRepository;
         _taskRepository = taskRepository;
+        _questionRepository = questionRepository;
         _ticketRepository = ticketRepository;
         _kanbanCardRepository = kanbanCardRepository;
         _projectRepository = projectRepository;
@@ -153,6 +156,171 @@ public class MaxController : BaseController
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error listing Max tasks for project {ProjectId}", projectId);
+            return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
+        }
+    }
+
+    // ---------- Questions ----------
+
+    [HttpGet("questions")]
+    [MapToApiVersion("1.0")]
+    [ProducesResponseType(typeof(List<MaxQuestionWithSourceResponse>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> ListPendingQuestions(string companyId, string projectId, [FromQuery] string status = "pending")
+    {
+        try
+        {
+            var gatewayResponse = await _maxGateway.CanViewAsync(companyId, projectId);
+            if (gatewayResponse.ResponseStatus != GatewayResponseCodes.Ok)
+                return ProcessGatewayResponse(gatewayResponse);
+
+            var normalized = status?.ToLowerInvariant() switch
+            {
+                "answered" => "answered",
+                "dismissed" => "dismissed",
+                _ => "pending",
+            };
+
+            var questions = await _questionRepository.GetByStatusAndProjectIdAsync(projectId, normalized);
+            if (questions.Count == 0)
+                return Ok(new List<MaxQuestionWithSourceResponse>());
+
+            var ticketQuestions = questions.Where(q => !string.IsNullOrEmpty(q.SourceTicketId)).ToList();
+            var storyQuestions = questions.Where(q => !string.IsNullOrEmpty(q.SourceStoryId)).ToList();
+
+            var result = new List<MaxQuestionWithSourceResponse>();
+
+            if (ticketQuestions.Count > 0)
+            {
+                var ticketIds = ticketQuestions.Select(q => q.SourceTicketId!).Distinct().ToList();
+                var ticketCollection = _ticketRepository.GetCollection();
+                var ticketFilter = MongoDB.Driver.Builders<Models.Entities.Ticket>.Filter.In(t => t.Id, ticketIds)
+                                 & MongoDB.Driver.Builders<Models.Entities.Ticket>.Filter.Eq(t => t.IsVoid, false);
+                var tickets = await ticketCollection.Find(ticketFilter).ToListAsync();
+                var ticketsById = tickets.ToDictionary(t => t.Id);
+
+                result.AddRange(ticketQuestions
+                    .Where(q => ticketsById.ContainsKey(q.SourceTicketId!))
+                    .Select(q =>
+                    {
+                        var ticket = ticketsById[q.SourceTicketId!];
+                        return new MaxQuestionWithSourceResponse
+                        {
+                            Question = _mapper.Map<MaxQuestionResponse>(q),
+                            SourceType = "ticket",
+                            TicketNumber = ticket.TicketNumber,
+                            TicketSubject = ticket.Subject,
+                            CustomerName = ticket.CustomerName,
+                        };
+                    }));
+            }
+
+            if (storyQuestions.Count > 0)
+            {
+                var storyIds = storyQuestions.Select(q => q.SourceStoryId!).Distinct().ToList();
+                var cardCollection = _kanbanCardRepository.GetCollection();
+                var cardFilter = MongoDB.Driver.Builders<Models.Entities.KanbanCard>.Filter.In(c => c.Id, storyIds)
+                               & MongoDB.Driver.Builders<Models.Entities.KanbanCard>.Filter.Eq(c => c.IsVoid, false);
+                var cards = await cardCollection.Find(cardFilter).ToListAsync();
+                var cardsById = cards.ToDictionary(c => c.Id);
+
+                result.AddRange(storyQuestions
+                    .Where(q => cardsById.ContainsKey(q.SourceStoryId!))
+                    .Select(q =>
+                    {
+                        var card = cardsById[q.SourceStoryId!];
+                        return new MaxQuestionWithSourceResponse
+                        {
+                            Question = _mapper.Map<MaxQuestionResponse>(q),
+                            SourceType = "story",
+                            StoryCardNumber = card.CardNumber,
+                            StoryTitle = card.Title,
+                        };
+                    }));
+            }
+
+            result = result.OrderByDescending(r => r.Question.CreatedOnDateTime).ToList();
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error listing Max questions for project {ProjectId}", projectId);
+            return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
+        }
+    }
+
+    [HttpPost("questions/{id}/answer")]
+    [MapToApiVersion("1.0")]
+    [ProducesResponseType(typeof(MaxQuestionResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> AnswerQuestion(string companyId, string projectId, string id, [FromBody] MaxQuestionAnswerRequest request)
+    {
+        try
+        {
+            var gatewayResponse = await _maxGateway.CanEditAsync(companyId, projectId);
+            if (gatewayResponse.ResponseStatus != GatewayResponseCodes.Ok)
+                return ProcessGatewayResponse(gatewayResponse);
+
+            if (string.IsNullOrWhiteSpace(request?.Answer))
+                return BadRequest(new BadRequestResponse { Message = "Answer is required" });
+
+            var question = await _questionRepository.GetAsync(id);
+            if (question == null || question.CompanyId != companyId || question.ProjectId != projectId)
+                return NotFound();
+
+            question.Answer = request.Answer.Trim();
+            question.Status = "answered";
+            question.AnsweredOnDateTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            question.PromotedToContext = request.PromoteToContext;
+            var updated = await _questionRepository.UpdateAsync(question);
+
+            if (request.PromoteToContext)
+            {
+                var project = await _projectRepository.GetAsync(projectId);
+                if (project != null && project.Settings?.Max != null)
+                {
+                    var current = project.Settings.Max.ProjectContext ?? string.Empty;
+                    var addition = $"Q: {question.Question}\nA: {question.Answer}";
+                    project.Settings.Max.ProjectContext = string.IsNullOrWhiteSpace(current)
+                        ? addition
+                        : current.TrimEnd() + "\n\n---\n" + addition;
+                    await _projectRepository.UpdateAsync(project);
+                }
+            }
+
+            await _auditService.LogAsync(companyId, projectId, "MaxQuestionAnswered", "MaxQuestion", id, _appUser,
+                request.PromoteToContext ? "promoted to context" : null);
+            return Ok(_mapper.Map<MaxQuestionResponse>(updated));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error answering Max question {QuestionId}", id);
+            return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
+        }
+    }
+
+    [HttpPost("questions/{id}/dismiss")]
+    [MapToApiVersion("1.0")]
+    [ProducesResponseType(typeof(MaxQuestionResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> DismissQuestion(string companyId, string projectId, string id)
+    {
+        try
+        {
+            var gatewayResponse = await _maxGateway.CanEditAsync(companyId, projectId);
+            if (gatewayResponse.ResponseStatus != GatewayResponseCodes.Ok)
+                return ProcessGatewayResponse(gatewayResponse);
+
+            var question = await _questionRepository.GetAsync(id);
+            if (question == null || question.CompanyId != companyId || question.ProjectId != projectId)
+                return NotFound();
+
+            question.Status = "dismissed";
+            var updated = await _questionRepository.UpdateAsync(question);
+
+            await _auditService.LogAsync(companyId, projectId, "MaxQuestionDismissed", "MaxQuestion", id, _appUser);
+            return Ok(_mapper.Map<MaxQuestionResponse>(updated));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error dismissing Max question {QuestionId}", id);
             return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
         }
     }

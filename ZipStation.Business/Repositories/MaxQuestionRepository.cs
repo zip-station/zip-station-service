@@ -9,6 +9,7 @@ public interface IMaxQuestionRepository : IBaseRepository<MaxQuestion>
     Task<List<MaxQuestion>> GetByTicketIdAsync(string ticketId);
     Task<List<MaxQuestion>> GetByStoryIdAsync(string storyId);
     Task<List<MaxQuestion>> GetPendingByProjectIdAsync(string projectId);
+    Task<List<MaxQuestion>> GetByStatusAndProjectIdAsync(string projectId, string status);
     Task<long> SoftDeletePendingByTicketIdAsync(string ticketId);
     Task<long> SoftDeletePendingByStoryIdAsync(string storyId);
 }
@@ -39,9 +40,12 @@ public class MaxQuestionRepository : BaseRepository<MaxQuestion>, IMaxQuestionRe
     }
 
     public async Task<List<MaxQuestion>> GetPendingByProjectIdAsync(string projectId)
+        => await GetByStatusAndProjectIdAsync(projectId, "pending");
+
+    public async Task<List<MaxQuestion>> GetByStatusAndProjectIdAsync(string projectId, string status)
     {
         var filter = Builders<MaxQuestion>.Filter.Eq(q => q.ProjectId, projectId)
-                   & Builders<MaxQuestion>.Filter.Eq(q => q.Status, "pending")
+                   & Builders<MaxQuestion>.Filter.Eq(q => q.Status, status)
                    & Builders<MaxQuestion>.Filter.Eq(q => q.IsVoid, false);
         return await _Collection.Find(filter)
             .SortByDescending(q => q.CreatedOnDateTime)

@@ -21,7 +21,7 @@ public class MaxEnrichmentService : IMaxEnrichmentService
     private const string AnthropicVersion = "2023-06-01";
     private const int MaxExampleRepliesInPrompt = 10;
     private const int MaxOpenTicketsInPrompt = 30;
-    private const int MaxAvailableStoriesInPrompt = 25;
+    private const int MaxAvailableStoriesInPrompt = 75;
     private const int AvailableStoriesRecencyDays = 90;
     private const int MaxOutputTokens = 2000;
 
@@ -555,7 +555,20 @@ public class MaxEnrichmentService : IMaxEnrichmentService
         sb.AppendLine();
 
         sb.AppendLine("## Flagging questions");
-        sb.AppendLine("If the ticket references a feature/concept/term NOT in the project context, and you cannot confidently respond without it, set flag_question=true and fill in question_for_maintainer and question_context_excerpt. Still produce your best-guess category/summary/action. Don't flag for things obvious from the context — re-read first.");
+        sb.AppendLine("Use flag_question to ask the maintainer about DURABLE PRODUCT KNOWLEDGE you don't have — facts that will stay true over time. Set flag_question=true and fill in question_for_maintainer and question_context_excerpt. Still produce your best-guess category/summary/action.");
+        sb.AppendLine();
+        sb.AppendLine("DO flag when:");
+        sb.AppendLine("- A feature, concept, or term in the ticket isn't in <project_context> and you need to know whether/how it works (\"does the app support recurring exports?\", \"how do users delete their account?\")");
+        sb.AppendLine("- A policy is unclear (\"what's the refund window?\", \"do we offer team plans?\")");
+        sb.AppendLine("- A how-to procedure isn't documented (\"how should users reset 2FA?\")");
+        sb.AppendLine();
+        sb.AppendLine("DO NOT flag when:");
+        sb.AppendLine("- The ticket describes a bug, error, outage, or anything broken. Capture the issue in `notes`/`reasoning` and use the `investigate` action instead. Bug status is transient — asking \"is this fixed?\" would pollute Max's long-term knowledge with stale state.");
+        sb.AppendLine("- You're guessing whether something was already fixed, deployed, or shipped. That's transient state, not durable knowledge.");
+        sb.AppendLine("- The answer is obvious from <project_context> — re-read it first.");
+        sb.AppendLine("- You just want a second opinion on tone, category, or wording. Pick your best guess and move on.");
+        sb.AppendLine();
+        sb.AppendLine("Heuristic: if the maintainer's answer would still be true in six months, flagging is appropriate. If the answer could change next week (a deploy, a fix, an incident), DO NOT flag — use notes/reasoning.");
         sb.AppendLine();
 
         sb.AppendLine("## Final check before output");
