@@ -281,7 +281,7 @@ public class KanbanBoardController : BaseController
                 ? request.ColumnId
                 : board.Columns[0].Id;
 
-            var maxPos = await _cardRepository.GetMaxPositionInColumnAsync(board.Id, targetColumnId);
+            var minPos = await _cardRepository.GetMinPositionInColumnAsync(board.Id, targetColumnId);
             var cardNumber = await _cardNumberCounterRepository.GetNextCardNumberAsync(projectId);
             var currentUser = await _userRepository.GetByFirebaseUserIdAsync(_appUser.UserId!);
 
@@ -292,7 +292,7 @@ public class KanbanBoardController : BaseController
                 BoardId = board.Id,
                 CardNumber = cardNumber,
                 ColumnId = targetColumnId,
-                Position = maxPos + PositionStep,
+                Position = (minPos ?? PositionStep) - PositionStep,
                 Title = request.Title.Trim(),
                 DescriptionHtml = request.DescriptionHtml,
                 Type = request.Type,

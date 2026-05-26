@@ -23,6 +23,7 @@ public interface IKanbanCardRepository : IBaseRepository<KanbanCard>
     Task<List<KanbanCard>> GetByTicketIdAsync(string ticketId);
     Task<List<KanbanCard>> GetByAnyLinkedTicketIdAsync(IEnumerable<string> ticketIds);
     Task<double> GetMaxPositionInColumnAsync(string boardId, string columnId);
+    Task<double?> GetMinPositionInColumnAsync(string boardId, string columnId);
     Task<bool> AnyInColumnAsync(string boardId, string columnId);
 }
 
@@ -145,6 +146,18 @@ public class KanbanCardRepository : BaseRepository<KanbanCard>, IKanbanCardRepos
             .Limit(1)
             .FirstOrDefaultAsync();
         return top?.Position ?? 0;
+    }
+
+    public async Task<double?> GetMinPositionInColumnAsync(string boardId, string columnId)
+    {
+        var filter = Builders<KanbanCard>.Filter.Eq(c => c.BoardId, boardId)
+                   & Builders<KanbanCard>.Filter.Eq(c => c.ColumnId, columnId)
+                   & Builders<KanbanCard>.Filter.Eq(c => c.IsVoid, false);
+        var bottom = await _Collection.Find(filter)
+            .SortBy(c => c.Position)
+            .Limit(1)
+            .FirstOrDefaultAsync();
+        return bottom?.Position;
     }
 
     public async Task<bool> AnyInColumnAsync(string boardId, string columnId)
