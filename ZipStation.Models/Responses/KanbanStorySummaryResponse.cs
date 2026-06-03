@@ -13,5 +13,6 @@ public class KanbanStorySummaryResponse
     public TicketPriority Priority { get; set; }
     public string ColumnId { get; set; } = string.Empty;
     public string? ColumnName { get; set; }
+    public bool IsResolved { get; set; }
     public string? AssignedToUserId { get; set; }
 }

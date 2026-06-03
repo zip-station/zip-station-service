@@ -51,7 +51,8 @@ public class KanbanStoriesController : BaseController
     public async Task<IActionResult> Search(
         string companyId,
         [FromQuery] string? query = null,
-        [FromQuery] string? projectId = null)
+        [FromQuery] string? projectId = null,
+        [FromQuery] string? status = null)
     {
         try
         {
@@ -67,6 +68,30 @@ public class KanbanStoriesController : BaseController
 
             if (!string.IsNullOrEmpty(projectId))
                 filter &= Builders<KanbanCard>.Filter.Eq(c => c.ProjectId, projectId);
+
+            // Filter by state (kanban column name, e.g. "To Do", "In Progress", "Done").
+            // Columns are per-board, so resolve the matching column IDs across the projects in scope.
+            if (!string.IsNullOrWhiteSpace(status))
+            {
+                var scopedProjectIds = !string.IsNullOrEmpty(projectId)
+                    ? new List<string> { projectId }
+                    : accessibleProjectIds;
+
+                var matchingColumnIds = new List<string>();
+                foreach (var pid in scopedProjectIds)
+                {
+                    var board = await _boardRepository.GetByProjectIdAsync(pid);
+                    if (board == null) continue;
+                    matchingColumnIds.AddRange(board.Columns
+                        .Where(col => string.Equals(col.Name, status, StringComparison.OrdinalIgnoreCase))
+                        .Select(col => col.Id));
+                }
+
+                // No column matches the requested state → no stories can be in it.
+                if (matchingColumnIds.Count == 0) return Ok(new List<KanbanStorySummaryResponse>());
+
+                filter &= Builders<KanbanCard>.Filter.In(c => c.ColumnId, matchingColumnIds);
+            }
 
             if (!string.IsNullOrWhiteSpace(query))
             {
@@ -164,6 +189,7 @@ public class KanbanStoriesController : BaseController
                 Priority = c.Priority,
                 ColumnId = c.ColumnId,
                 ColumnName = columnName,
+                IsResolved = board != null && !string.IsNullOrEmpty(board.ResolvedColumnId) && c.ColumnId == board.ResolvedColumnId,
                 AssignedToUserId = c.AssignedToUserId,
             };
         }).ToList();
