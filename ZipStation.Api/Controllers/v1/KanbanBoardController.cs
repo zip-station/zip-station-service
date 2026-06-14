@@ -249,9 +249,19 @@ public class KanbanBoardController : BaseController
                 resolvedAssignee = currentUser?.Id;
             }
 
+            // If the search text is a recognized external-source link (e.g. a Discord forum
+            // post), match it against each card's ExternalSources instead of title/description.
+            var textQuery = query;
+            KanbanCardExternalSource? externalSource = null;
+            if (!string.IsNullOrWhiteSpace(query))
+            {
+                externalSource = ParseExternalSourceUrl(query.Trim());
+                if (externalSource != null) textQuery = null;
+            }
+
             var cards = await _cardRepository.SearchAsync(
-                board.Id, query, columnId, resolvedAssignee, type, tags, hasLinkedTickets,
-                createdSince, includeArchived, archiveDays, board.ResolvedColumnId);
+                board.Id, textQuery, columnId, resolvedAssignee, type, tags, hasLinkedTickets,
+                createdSince, includeArchived, archiveDays, board.ResolvedColumnId, externalSource);
 
             return Ok(_mapper.Map<List<KanbanCardResponse>>(cards));
         }
