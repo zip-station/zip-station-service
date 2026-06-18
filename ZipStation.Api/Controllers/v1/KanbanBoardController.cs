@@ -181,6 +181,18 @@ public class KanbanBoardController : BaseController
                 board.ResolvedColumnId = request.ResolvedColumnId;
             }
 
+            // Validate intake column still exists. Empty request = caller isn't managing it:
+            // keep the existing one if still valid, else fall back to the lowest-position column.
+            if (string.IsNullOrEmpty(request.IntakeColumnId) || !newIds.Contains(request.IntakeColumnId))
+            {
+                if (!newIds.Contains(board.IntakeColumnId))
+                    board.IntakeColumnId = newColumns.OrderBy(c => c.Position).First().Id;
+            }
+            else
+            {
+                board.IntakeColumnId = request.IntakeColumnId;
+            }
+
             // Reconcile custom story types when provided. Null = caller isn't managing types.
             if (request.CardTypes != null)
             {
@@ -221,6 +233,31 @@ public class KanbanBoardController : BaseController
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error setting resolved column for project {ProjectId}", projectId);
+            return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
+        }
+    }
+
+    [HttpPut("intake-column")]
+    [MapToApiVersion("1.0")]
+    [ProducesResponseType(typeof(KanbanBoardResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> SetIntakeColumn(string companyId, string projectId, [FromBody] SetIntakeColumnRequest request)
+    {
+        try
+        {
+            var gw = await _gateway.CanEditAsync(companyId, projectId);
+            if (gw.ResponseStatus != GatewayResponseCodes.Ok) return ProcessGatewayResponse(gw);
+
+            var board = await GetOrCreateBoardAsync(companyId, projectId);
+            if (!board.Columns.Any(c => c.Id == request.ColumnId))
+                return BadRequest(new BadRequestResponse { Message = "Column not found on this board" });
+
+            board.IntakeColumnId = request.ColumnId;
+            await _boardRepository.UpdateAsync(board);
+            return Ok(_mapper.Map<KanbanBoardResponse>(board));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error setting intake column for project {ProjectId}", projectId);
             return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
         }
     }
@@ -303,7 +340,7 @@ public class KanbanBoardController : BaseController
 
             var targetColumnId = !string.IsNullOrEmpty(request.ColumnId) && board.Columns.Any(c => c.Id == request.ColumnId)
                 ? request.ColumnId
-                : board.Columns[0].Id;
+                : board.ResolveIntakeColumnId();
 
             var minPos = await _cardRepository.GetMinPositionInColumnAsync(board.Id, targetColumnId);
             var cardNumber = await _cardNumberCounterRepository.GetNextCardNumberAsync(projectId);
@@ -883,6 +920,7 @@ public class KanbanBoardController : BaseController
             ProjectId = projectId,
             Columns = columns,
             ResolvedColumnId = columns[^1].Id,
+            IntakeColumnId = columns[0].Id,
         };
         return await _boardRepository.CreateAsync(newBoard);
     }
@@ -1053,6 +1091,10 @@ public class UpdateKanbanColumnsRequest
     public List<KanbanColumnInput> Columns { get; set; } = new();
     public string ResolvedColumnId { get; set; } = string.Empty;
 
+    /// Column automated intake (Discord/Max) drops new cards into. Empty leaves the board's
+    /// existing intake column untouched — so callers that only manage columns don't have to send it.
+    public string IntakeColumnId { get; set; } = string.Empty;
+
     /// Custom (project-specific) story types to persist on the board. Null means "leave the
     /// existing custom types untouched" — so callers that only manage columns (e.g. the MCP
     /// update_columns tool) don't have to send them.
@@ -1075,6 +1117,11 @@ public class KanbanCardTypeInput
 }
 
 public class SetResolvedColumnRequest
+{
+    public string ColumnId { get; set; } = string.Empty;
+}
+
+public class SetIntakeColumnRequest
 {
     public string ColumnId { get; set; } = string.Empty;
 }

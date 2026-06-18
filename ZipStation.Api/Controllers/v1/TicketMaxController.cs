@@ -294,7 +294,7 @@ public class TicketMaxController : BaseController
     private async Task<(bool ok, string error)> ExecuteAddToBacklogAsync(Ticket ticket, MaxTask task, User? currentUser)
     {
         var board = await GetOrCreateBoardAsync(ticket.CompanyId, ticket.ProjectId);
-        var columnId = board.Columns[0].Id;
+        var columnId = board.ResolveIntakeColumnId();
         var cardNumber = await _kanbanCardNumberCounterRepository.GetNextCardNumberAsync(ticket.ProjectId);
         var maxPos = await _kanbanCardRepository.GetMaxPositionInColumnAsync(board.Id, columnId);
 
