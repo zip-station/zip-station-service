@@ -11,6 +11,7 @@ public class KanbanMappingProfile : Profile
     {
         CreateMap<KanbanBoard, KanbanBoardResponse>();
         CreateMap<KanbanColumn, KanbanColumnResponse>();
+        CreateMap<KanbanCardTypeDefinition, KanbanCardTypeResponse>();
 
         CreateMap<KanbanCardCommandModel, KanbanCard>();
         CreateMap<KanbanCard, KanbanCardResponse>();

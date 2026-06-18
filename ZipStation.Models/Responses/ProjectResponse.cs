@@ -48,7 +48,7 @@ public class DiscordSourceResponse
     public string GuildId { get; set; } = string.Empty;
     public string ChannelId { get; set; } = string.Empty;
     public bool IsForum { get; set; }
-    public KanbanCardType? DefaultCardType { get; set; }
+    public string? DefaultCardType { get; set; }
     public bool Enabled { get; set; }
 }
 

@@ -9,7 +9,7 @@ public class KanbanStorySummaryResponse
     public string? ProjectName { get; set; }
     public long CardNumber { get; set; }
     public string Title { get; set; } = string.Empty;
-    public KanbanCardType Type { get; set; }
+    public string Type { get; set; } = string.Empty;
     public TicketPriority Priority { get; set; }
     public string ColumnId { get; set; } = string.Empty;
     public string? ColumnName { get; set; }

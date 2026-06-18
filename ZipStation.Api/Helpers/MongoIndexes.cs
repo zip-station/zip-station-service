@@ -1,5 +1,7 @@
+using MongoDB.Bson;
 using MongoDB.Driver;
 using ZipStation.Business.Helpers;
+using ZipStation.Models.Constants;
 using ZipStation.Models.Entities;
 
 namespace ZipStation.Api.Helpers;
@@ -132,6 +134,13 @@ public static class MongoIndexes
             new CreateIndexModel<KanbanCard>(Builders<KanbanCard>.IndexKeys.Ascending(c => c.AssignedToUserId)),
         });
 
+        // One-time, idempotent migration: story type used to be a closed enum stored as a BSON
+        // int (0=Feature,1=Bug,2=Improvement,3=TechDebt). It's now a string so projects can add
+        // custom types. Normalize any remaining numeric values to their built-in name so type
+        // filters work on legacy cards. Reads already tolerate ints via the field serializer;
+        // this just makes stored data consistent. Safe to re-run — only touches numeric values.
+        await MigrateLegacyCardTypesAsync(database, collections.KanbanCards);
+
         // Kanban Card Comments
         var kanbanCardComments = database.GetCollection<KanbanCardComment>(collections.KanbanCardComments);
         await kanbanCardComments.Indexes.CreateManyAsync(new[]
@@ -192,5 +201,20 @@ public static class MongoIndexes
                 Builders<PersonalAccessToken>.IndexKeys.Ascending(t => t.UserId),
                 Builders<PersonalAccessToken>.IndexKeys.Ascending(t => t.CompanyId))),
         });
+    }
+
+    /// Rewrites legacy numeric KanbanCard.type values (0–3) to their built-in string names.
+    /// Operates on raw BsonDocuments so the int-vs-string comparison happens at the storage
+    /// level. Idempotent: a string `type` never matches the numeric filter.
+    private static async Task MigrateLegacyCardTypesAsync(IMongoDatabase database, string collectionName)
+    {
+        var raw = database.GetCollection<BsonDocument>(collectionName);
+        for (var legacyValue = 0; legacyValue < KanbanCardTypes.BuiltIns.Count; legacyValue++)
+        {
+            var name = KanbanCardTypes.BuiltIns[legacyValue];
+            var filter = Builders<BsonDocument>.Filter.Eq("type", legacyValue);
+            var update = Builders<BsonDocument>.Update.Set("type", name);
+            await raw.UpdateManyAsync(filter, update);
+        }
     }
 }

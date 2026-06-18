@@ -6,6 +6,7 @@ using ZipStation.Business.Gateways;
 using ZipStation.Business.Helpers;
 using ZipStation.Business.Repositories;
 using ZipStation.Business.Services;
+using ZipStation.Models.Constants;
 using ZipStation.Models.Entities;
 using ZipStation.Models.Enums;
 using ZipStation.Models.Responses;
@@ -297,9 +298,10 @@ public class TicketMaxController : BaseController
         var cardNumber = await _kanbanCardNumberCounterRepository.GetNextCardNumberAsync(ticket.ProjectId);
         var maxPos = await _kanbanCardRepository.GetMaxPositionInColumnAsync(board.Id, columnId);
 
-        var typeName = task.Details.SuggestedKanbanType ?? "Improvement";
-        if (!Enum.TryParse<KanbanCardType>(typeName, ignoreCase: true, out var cardType))
-            cardType = KanbanCardType.Improvement;
+        var typeName = task.Details.SuggestedKanbanType ?? KanbanCardTypes.Improvement;
+        // Max suggests by built-in name; anything unrecognized falls back to Improvement.
+        var cardType = KanbanCardTypes.BuiltIns.FirstOrDefault(
+            t => string.Equals(t, typeName, StringComparison.OrdinalIgnoreCase)) ?? KanbanCardTypes.Improvement;
 
         // Defense in depth — older pending tasks (from before the prompt fix) may still have
         // a `Kanban title:` prefix saved on disk.

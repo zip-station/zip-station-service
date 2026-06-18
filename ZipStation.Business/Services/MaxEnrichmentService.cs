@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using MongoDB.Driver;
 using ZipStation.Business.Helpers;
 using ZipStation.Business.Repositories;
+using ZipStation.Models.Constants;
 using ZipStation.Models.Entities;
 using ZipStation.Models.Enums;
 
@@ -280,7 +281,7 @@ public class MaxEnrichmentService : IMaxEnrichmentService
         var collection = _kanbanCardRepository.GetCollection();
         var filter = Builders<KanbanCard>.Filter.Eq(c => c.BoardId, boardId)
                    & Builders<KanbanCard>.Filter.Eq(c => c.IsVoid, false)
-                   & Builders<KanbanCard>.Filter.In(c => c.Type, new[] { KanbanCardType.Bug, KanbanCardType.Feature })
+                   & Builders<KanbanCard>.Filter.In(c => c.Type, new[] { KanbanCardTypes.Bug, KanbanCardTypes.Feature })
                    & Builders<KanbanCard>.Filter.Gte(c => c.UpdatedOnDateTime, cutoff);
         if (!string.IsNullOrEmpty(resolvedColumnId))
             filter &= Builders<KanbanCard>.Filter.Ne(c => c.ColumnId, resolvedColumnId);

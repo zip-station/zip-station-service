@@ -13,7 +13,7 @@ public class KanbanCardResponse
     public double Position { get; set; }
     public string Title { get; set; } = string.Empty;
     public string? DescriptionHtml { get; set; }
-    public KanbanCardType Type { get; set; }
+    public string Type { get; set; } = string.Empty;
     public TicketPriority Priority { get; set; }
     public List<string> Tags { get; set; } = new();
     public string? AssignedToUserId { get; set; }

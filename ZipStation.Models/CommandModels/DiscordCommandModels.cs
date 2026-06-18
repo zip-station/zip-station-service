@@ -18,7 +18,7 @@ public class DiscordSourceCommandModel
     public string GuildId { get; set; } = string.Empty;
     public string ChannelId { get; set; } = string.Empty;
     public bool IsForum { get; set; } = true;
-    /// Null = "Auto — let Max decide". Otherwise an explicit KanbanCardType.
-    public KanbanCardType? DefaultCardType { get; set; }
+    /// Null = "Auto — let Max decide". Otherwise a built-in story-type name or a custom type id.
+    public string? DefaultCardType { get; set; }
     public bool Enabled { get; set; } = true;
 }

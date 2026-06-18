@@ -1,6 +1,8 @@
 using MongoDB.Bson.Serialization.Attributes;
 using ZipStation.Models.Attributes;
+using ZipStation.Models.Constants;
 using ZipStation.Models.Enums;
+using ZipStation.Models.Serialization;
 
 namespace ZipStation.Models.Entities;
 
@@ -28,7 +30,11 @@ public class KanbanCard : BaseEntity
     [BsonIgnoreIfNull]
     public string? DescriptionHtml { get; set; }
 
-    public KanbanCardType Type { get; set; } = KanbanCardType.Feature;
+    /// A built-in story-type name (see <see cref="KanbanCardTypes"/>) or the id of a custom type
+    /// defined on the project's board. Stored as a string; the serializer tolerates legacy int
+    /// values from before custom types existed.
+    [BsonSerializer(typeof(LegacyCardTypeStringSerializer))]
+    public string Type { get; set; } = KanbanCardTypes.Feature;
 
     public TicketPriority Priority { get; set; } = TicketPriority.Normal;
 

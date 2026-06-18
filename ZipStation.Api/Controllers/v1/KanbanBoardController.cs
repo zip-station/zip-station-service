@@ -7,6 +7,7 @@ using ZipStation.Business.Gateways;
 using ZipStation.Business.Helpers;
 using ZipStation.Business.Repositories;
 using ZipStation.Business.Services;
+using ZipStation.Models.Constants;
 using ZipStation.Models.Entities;
 using ZipStation.Models.Enums;
 using ZipStation.Models.Responses;
@@ -180,6 +181,14 @@ public class KanbanBoardController : BaseController
                 board.ResolvedColumnId = request.ResolvedColumnId;
             }
 
+            // Reconcile custom story types when provided. Null = caller isn't managing types.
+            if (request.CardTypes != null)
+            {
+                var typesError = await ReconcileCustomCardTypesAsync(board, request.CardTypes);
+                if (typesError != null)
+                    return BadRequest(new BadRequestResponse { Message = typesError });
+            }
+
             await _boardRepository.UpdateAsync(board);
             await _auditService.LogAsync(companyId, projectId, "KanbanColumnsUpdated", "KanbanBoard", board.Id, _appUser);
             return Ok(_mapper.Map<KanbanBoardResponse>(board));
@@ -227,7 +236,7 @@ public class KanbanBoardController : BaseController
         [FromQuery] string? query = null,
         [FromQuery] string? columnId = null,
         [FromQuery] string? assignedTo = null,
-        [FromQuery] KanbanCardType? type = null,
+        [FromQuery] string? type = null,
         [FromQuery] List<string>? tags = null,
         [FromQuery] bool? hasLinkedTickets = null,
         [FromQuery] long? createdSince = null,
@@ -287,6 +296,11 @@ public class KanbanBoardController : BaseController
                 return BadRequest(new BadRequestResponse { Message = "Title is required" });
 
             var board = await GetOrCreateBoardAsync(companyId, projectId);
+
+            var cardType = NormalizeCardType(board, request.Type);
+            if (cardType == null)
+                return BadRequest(new BadRequestResponse { Message = "Unknown story type" });
+
             var targetColumnId = !string.IsNullOrEmpty(request.ColumnId) && board.Columns.Any(c => c.Id == request.ColumnId)
                 ? request.ColumnId
                 : board.Columns[0].Id;
@@ -305,7 +319,7 @@ public class KanbanBoardController : BaseController
                 Position = (minPos ?? PositionStep) - PositionStep,
                 Title = request.Title.Trim(),
                 DescriptionHtml = request.DescriptionHtml,
-                Type = request.Type,
+                Type = cardType,
                 Priority = request.Priority,
                 Tags = request.Tags ?? new List<string>(),
                 AssignedToUserId = request.AssignedToUserId,
@@ -447,7 +461,13 @@ public class KanbanBoardController : BaseController
 
             if (request.Title != null) card.Title = request.Title.Trim();
             if (request.DescriptionHtml != null) card.DescriptionHtml = request.DescriptionHtml;
-            if (request.Type.HasValue) card.Type = request.Type.Value;
+            if (request.Type != null)
+            {
+                var cardType = NormalizeCardType(board, request.Type);
+                if (cardType == null)
+                    return BadRequest(new BadRequestResponse { Message = "Unknown story type" });
+                card.Type = cardType;
+            }
             if (request.Priority.HasValue) card.Priority = request.Priority.Value;
             if (request.Tags != null) card.Tags = request.Tags;
             if (request.ClearAssignee == true) card.AssignedToUserId = null;
@@ -726,17 +746,24 @@ public class KanbanBoardController : BaseController
             if (string.IsNullOrEmpty(url))
                 return BadRequest(new BadRequestResponse { Message = "Paste a URL to link." });
 
+            // Recognized sources (currently Discord) get rich parsing; anything else that's a
+            // valid http/https URL is pinned as a generic Link.
             var parsed = ParseExternalSourceUrl(url);
             if (parsed == null)
-                return BadRequest(new BadRequestResponse { Message = "Couldn't recognize that URL. v1 supports Discord links (https://discord.com/channels/…)." });
-
-            // Dedup by (type, messageId) — same key as Discord poll idempotency.
-            if (card.ExternalSources.Any(s => s.Type == parsed.Type
-                && !string.IsNullOrEmpty(parsed.MessageId)
-                && string.Equals(s.MessageId, parsed.MessageId, StringComparison.Ordinal)))
             {
-                return Ok(_mapper.Map<KanbanCardResponse>(card)); // idempotent: already linked
+                if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)
+                    || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+                    return BadRequest(new BadRequestResponse { Message = "Enter a valid link starting with http:// or https://" });
+
+                parsed = new KanbanCardExternalSource { Type = ExternalSourceType.Link, Url = url };
             }
+
+            // Idempotent: dedup Discord by messageId (matches the poll's key), generic links by URL.
+            var alreadyLinked = parsed.Type == ExternalSourceType.Discord && !string.IsNullOrEmpty(parsed.MessageId)
+                ? card.ExternalSources.Any(s => s.Type == parsed.Type && string.Equals(s.MessageId, parsed.MessageId, StringComparison.Ordinal))
+                : card.ExternalSources.Any(s => string.Equals(s.Url, parsed.Url, StringComparison.OrdinalIgnoreCase));
+            if (alreadyLinked)
+                return Ok(_mapper.Map<KanbanCardResponse>(card)); // already linked
 
             card.ExternalSources.Add(parsed);
             await _cardRepository.UpdateAsync(card);
@@ -751,10 +778,10 @@ public class KanbanBoardController : BaseController
         }
     }
 
-    [HttpDelete("cards/{id}/external-source/{messageId}")]
+    [HttpDelete("cards/{id}/external-source")]
     [MapToApiVersion("1.0")]
     [ProducesResponseType(typeof(KanbanCardResponse), StatusCodes.Status200OK)]
-    public async Task<IActionResult> RemoveExternalSource(string companyId, string projectId, string id, string messageId)
+    public async Task<IActionResult> RemoveExternalSource(string companyId, string projectId, string id, [FromQuery] string url)
     {
         try
         {
@@ -764,12 +791,13 @@ public class KanbanBoardController : BaseController
             var card = await _cardRepository.GetAsync(id);
             if (card == null || card.CompanyId != companyId || card.ProjectId != projectId) return NotFound();
 
+            // Keyed by URL so it works for every source type (Discord and generic links alike).
             var before = card.ExternalSources.Count;
-            card.ExternalSources.RemoveAll(s => string.Equals(s.MessageId, messageId, StringComparison.Ordinal));
+            card.ExternalSources.RemoveAll(s => string.Equals(s.Url, url, StringComparison.Ordinal));
             if (card.ExternalSources.Count != before)
             {
                 await _cardRepository.UpdateAsync(card);
-                await _auditService.LogAsync(companyId, projectId, "ExternalSourceUnlinked", "KanbanCard", card.Id, _appUser, messageId);
+                await _auditService.LogAsync(companyId, projectId, "ExternalSourceUnlinked", "KanbanCard", card.Id, _appUser, url);
             }
 
             return Ok(_mapper.Map<KanbanCardResponse>(card));
@@ -782,6 +810,60 @@ public class KanbanBoardController : BaseController
     }
 
     // ----- Helpers -----
+
+    /// Resolves an incoming story-type value to a stored key. Empty resolves to the default
+    /// built-in; a built-in name or a custom type id defined on this board passes through;
+    /// anything else returns null (caller rejects with 400).
+    private static string? NormalizeCardType(KanbanBoard board, string? type)
+    {
+        if (string.IsNullOrWhiteSpace(type)) return KanbanCardTypes.Feature;
+        var trimmed = type.Trim();
+        if (KanbanCardTypes.IsBuiltIn(trimmed)) return trimmed;
+        return board.CustomCardTypes.Any(t => t.Id == trimmed) ? trimmed : null;
+    }
+
+    /// Applies the requested custom-type set to the board: preserves existing types by id (so
+    /// renames/recolors don't rewrite any cards), creates new ones, and refuses to remove a type
+    /// that cards still use. Returns an error message on failure, or null on success.
+    private async Task<string?> ReconcileCustomCardTypesAsync(KanbanBoard board, List<KanbanCardTypeInput> inputs)
+    {
+        var existingById = board.CustomCardTypes.ToDictionary(t => t.Id);
+        var newTypes = new List<KanbanCardTypeDefinition>();
+        var seenLabels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var input in inputs)
+        {
+            var label = (input.Label ?? string.Empty).Trim();
+            if (string.IsNullOrEmpty(label))
+                return "Story type name cannot be empty";
+            if (KanbanCardTypes.IsBuiltIn(label))
+                return $"\"{label}\" is already a built-in story type";
+            if (!seenLabels.Add(label))
+                return $"Duplicate story type \"{label}\"";
+
+            if (!string.IsNullOrEmpty(input.Id) && existingById.TryGetValue(input.Id, out var existing))
+            {
+                existing.Label = label;
+                existing.Color = input.Color;
+                newTypes.Add(existing);
+            }
+            else
+            {
+                newTypes.Add(new KanbanCardTypeDefinition { Label = label, Color = input.Color });
+            }
+        }
+
+        var newIds = newTypes.Select(t => t.Id).ToHashSet();
+        var removedIds = board.CustomCardTypes.Where(t => !newIds.Contains(t.Id)).Select(t => t.Id).ToList();
+        foreach (var removedId in removedIds)
+        {
+            if (await _cardRepository.AnyWithTypeAsync(board.Id, removedId))
+                return "Reassign cards before removing a story type";
+        }
+
+        board.CustomCardTypes = newTypes;
+        return null;
+    }
 
     private async Task<KanbanBoard> GetOrCreateBoardAsync(string companyId, string projectId)
     {
@@ -970,12 +1052,25 @@ public class UpdateKanbanColumnsRequest
 {
     public List<KanbanColumnInput> Columns { get; set; } = new();
     public string ResolvedColumnId { get; set; } = string.Empty;
+
+    /// Custom (project-specific) story types to persist on the board. Null means "leave the
+    /// existing custom types untouched" — so callers that only manage columns (e.g. the MCP
+    /// update_columns tool) don't have to send them.
+    public List<KanbanCardTypeInput>? CardTypes { get; set; }
 }
 
 public class KanbanColumnInput
 {
     public string? Id { get; set; }
     public string Name { get; set; } = string.Empty;
+    public string? Color { get; set; }
+}
+
+public class KanbanCardTypeInput
+{
+    /// Existing custom type id to update, or null/empty to create a new one.
+    public string? Id { get; set; }
+    public string Label { get; set; } = string.Empty;
     public string? Color { get; set; }
 }
 
@@ -989,7 +1084,7 @@ public class CreateKanbanCardRequest
     public string ColumnId { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public string? DescriptionHtml { get; set; }
-    public KanbanCardType Type { get; set; } = KanbanCardType.Feature;
+    public string Type { get; set; } = KanbanCardTypes.Feature;
     public TicketPriority Priority { get; set; } = TicketPriority.Normal;
     public List<string>? Tags { get; set; }
     public string? AssignedToUserId { get; set; }
@@ -1000,7 +1095,7 @@ public class UpdateKanbanCardRequest
 {
     public string? Title { get; set; }
     public string? DescriptionHtml { get; set; }
-    public KanbanCardType? Type { get; set; }
+    public string? Type { get; set; }
     public TicketPriority? Priority { get; set; }
     public List<string>? Tags { get; set; }
     public string? AssignedToUserId { get; set; }

@@ -1,6 +1,7 @@
 using MongoDB.Bson.Serialization.Attributes;
 using ZipStation.Models.Attributes;
 using ZipStation.Models.Enums;
+using ZipStation.Models.Serialization;
 
 namespace ZipStation.Models.Entities;
 
@@ -83,9 +84,12 @@ public class DiscordSource
     public string? LastSeenId { get; set; }
 
     /// Default card type for cards created from this source. Null means "let Max decide".
-    /// When Max is disabled or its call fails the worker falls back to Bug.
+    /// When Max is disabled or its call fails the worker falls back to Bug. A built-in type
+    /// name or a custom type id from the project's board. The serializer tolerates legacy int
+    /// values stored before story types became strings.
     [BsonIgnoreIfNull]
-    public KanbanCardType? DefaultCardType { get; set; }
+    [BsonSerializer(typeof(LegacyCardTypeStringSerializer))]
+    public string? DefaultCardType { get; set; }
 
     public bool Enabled { get; set; } = true;
 }

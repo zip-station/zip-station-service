@@ -12,7 +12,7 @@ public interface IKanbanCardRepository : IBaseRepository<KanbanCard>
         string? text,
         string? columnId,
         string? assignedToUserId,
-        KanbanCardType? type,
+        string? type,
         List<string>? tags,
         bool? hasLinkedTickets,
         long? createdSince,
@@ -26,6 +26,7 @@ public interface IKanbanCardRepository : IBaseRepository<KanbanCard>
     Task<double> GetMaxPositionInColumnAsync(string boardId, string columnId);
     Task<double?> GetMinPositionInColumnAsync(string boardId, string columnId);
     Task<bool> AnyInColumnAsync(string boardId, string columnId);
+    Task<bool> AnyWithTypeAsync(string boardId, string type);
 }
 
 public class KanbanCardRepository : BaseRepository<KanbanCard>, IKanbanCardRepository
@@ -53,7 +54,7 @@ public class KanbanCardRepository : BaseRepository<KanbanCard>, IKanbanCardRepos
         string? text,
         string? columnId,
         string? assignedToUserId,
-        KanbanCardType? type,
+        string? type,
         List<string>? tags,
         bool? hasLinkedTickets,
         long? createdSince,
@@ -79,8 +80,8 @@ public class KanbanCardRepository : BaseRepository<KanbanCard>, IKanbanCardRepos
                 filter &= Builders<KanbanCard>.Filter.Eq(c => c.AssignedToUserId, assignedToUserId);
         }
 
-        if (type.HasValue)
-            filter &= Builders<KanbanCard>.Filter.Eq(c => c.Type, type.Value);
+        if (!string.IsNullOrWhiteSpace(type))
+            filter &= Builders<KanbanCard>.Filter.Eq(c => c.Type, type);
 
         if (tags != null && tags.Count > 0)
             filter &= Builders<KanbanCard>.Filter.AnyIn(c => c.Tags, tags);
@@ -169,6 +170,14 @@ public class KanbanCardRepository : BaseRepository<KanbanCard>, IKanbanCardRepos
     {
         var filter = Builders<KanbanCard>.Filter.Eq(c => c.BoardId, boardId)
                    & Builders<KanbanCard>.Filter.Eq(c => c.ColumnId, columnId)
+                   & Builders<KanbanCard>.Filter.Eq(c => c.IsVoid, false);
+        return await _Collection.CountDocumentsAsync(filter) > 0;
+    }
+
+    public async Task<bool> AnyWithTypeAsync(string boardId, string type)
+    {
+        var filter = Builders<KanbanCard>.Filter.Eq(c => c.BoardId, boardId)
+                   & Builders<KanbanCard>.Filter.Eq(c => c.Type, type)
                    & Builders<KanbanCard>.Filter.Eq(c => c.IsVoid, false);
         return await _Collection.CountDocumentsAsync(filter) > 0;
     }
