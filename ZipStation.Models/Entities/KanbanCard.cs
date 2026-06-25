@@ -24,6 +24,18 @@ public class KanbanCard : BaseEntity
 
     public double Position { get; set; }
 
+    /// Lifecycle bucket, orthogonal to <see cref="ColumnId"/>. The board renders
+    /// <see cref="KanbanStoryStatus.Committed"/>/<see cref="KanbanStoryStatus.Resolved"/> work;
+    /// the backlog grid covers everything. Defaults to <see cref="KanbanStoryStatus.Committed"/>
+    /// so legacy cards (written before this field existed) read back on the board unchanged.
+    [DoNotClearOnPatch]
+    public KanbanStoryStatus Status { get; set; } = KanbanStoryStatus.Committed;
+
+    /// Fractional rank used to hand-order the backlog grid (lower = higher priority / nearer the
+    /// top). Per-board, mirroring how <see cref="Position"/> works within a column. Only meaningful
+    /// for backlog/unreviewed stories; committed work is ordered by <see cref="Position"/>.
+    public double BacklogPosition { get; set; }
+
     [DoNotClearOnPatch]
     public string Title { get; set; } = string.Empty;
 

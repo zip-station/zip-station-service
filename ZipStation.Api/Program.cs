@@ -223,6 +223,7 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<IMongoDatabase>();
     await MongoIndexes.EnsureIndexesAsync(db, appConfig);
+    await MongoMigrations.RunAsync(db, appConfig);
 }
 
 app.MapControllers();

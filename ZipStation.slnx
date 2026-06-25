@@ -3,4 +3,5 @@
   <Project Path="ZipStation.Business/ZipStation.Business.csproj" />
   <Project Path="ZipStation.Mapping/ZipStation.Mapping.csproj" />
   <Project Path="ZipStation.Models/ZipStation.Models.csproj" />
+  <Project Path="ZipStation.Tests/ZipStation.Tests.csproj" />
 </Solution>

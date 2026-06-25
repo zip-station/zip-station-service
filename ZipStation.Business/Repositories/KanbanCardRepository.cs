@@ -6,7 +6,6 @@ namespace ZipStation.Business.Repositories;
 
 public interface IKanbanCardRepository : IBaseRepository<KanbanCard>
 {
-    Task<List<KanbanCard>> GetByBoardIdAsync(string boardId, bool includeArchived, int archiveDays, string resolvedColumnId);
     Task<List<KanbanCard>> SearchAsync(
         string boardId,
         string? text,
@@ -16,9 +15,7 @@ public interface IKanbanCardRepository : IBaseRepository<KanbanCard>
         List<string>? tags,
         bool? hasLinkedTickets,
         long? createdSince,
-        bool includeArchived,
-        int archiveDays,
-        string resolvedColumnId,
+        IReadOnlyList<KanbanStoryStatus>? statuses,
         KanbanCardExternalSource? externalSource = null);
     Task<KanbanCard?> GetByCardNumberAsync(string projectId, long cardNumber);
     Task<List<KanbanCard>> GetByTicketIdAsync(string ticketId);
@@ -36,19 +33,6 @@ public class KanbanCardRepository : BaseRepository<KanbanCard>, IKanbanCardRepos
     {
     }
 
-    public async Task<List<KanbanCard>> GetByBoardIdAsync(string boardId, bool includeArchived, int archiveDays, string resolvedColumnId)
-    {
-        var filter = Builders<KanbanCard>.Filter.Eq(c => c.BoardId, boardId)
-                   & Builders<KanbanCard>.Filter.Eq(c => c.IsVoid, false);
-
-        filter &= BuildArchiveFilter(includeArchived, archiveDays, resolvedColumnId);
-
-        return await _Collection.Find(filter)
-            .SortBy(c => c.ColumnId)
-            .ThenBy(c => c.Position)
-            .ToListAsync();
-    }
-
     public async Task<List<KanbanCard>> SearchAsync(
         string boardId,
         string? text,
@@ -58,9 +42,7 @@ public class KanbanCardRepository : BaseRepository<KanbanCard>, IKanbanCardRepos
         List<string>? tags,
         bool? hasLinkedTickets,
         long? createdSince,
-        bool includeArchived,
-        int archiveDays,
-        string resolvedColumnId,
+        IReadOnlyList<KanbanStoryStatus>? statuses,
         KanbanCardExternalSource? externalSource = null)
     {
         var filter = Builders<KanbanCard>.Filter.Eq(c => c.BoardId, boardId)
@@ -110,7 +92,8 @@ public class KanbanCardRepository : BaseRepository<KanbanCard>, IKanbanCardRepos
             filter &= Builders<KanbanCard>.Filter.Or(textFilters);
         }
 
-        filter &= BuildArchiveFilter(includeArchived, archiveDays, resolvedColumnId);
+        if (statuses != null && statuses.Count > 0)
+            filter &= Builders<KanbanCard>.Filter.In(c => c.Status, statuses);
 
         return await _Collection.Find(filter)
             .SortBy(c => c.ColumnId)
@@ -205,17 +188,5 @@ public class KanbanCardRepository : BaseRepository<KanbanCard>, IKanbanCardRepos
         }
 
         return Builders<KanbanCard>.Filter.ElemMatch(c => c.ExternalSources, elem);
-    }
-
-    private static FilterDefinition<KanbanCard> BuildArchiveFilter(bool includeArchived, int archiveDays, string resolvedColumnId)
-    {
-        if (includeArchived || string.IsNullOrEmpty(resolvedColumnId))
-            return Builders<KanbanCard>.Filter.Empty;
-
-        var cutoff = DateTimeOffset.UtcNow.AddDays(-Math.Max(archiveDays, 0)).ToUnixTimeMilliseconds();
-        var notInResolved = Builders<KanbanCard>.Filter.Ne(c => c.ColumnId, resolvedColumnId);
-        var resolvedButRecent = Builders<KanbanCard>.Filter.Eq(c => c.ColumnId, resolvedColumnId)
-                              & Builders<KanbanCard>.Filter.Gte(c => c.ResolvedOnDateTime, cutoff);
-        return Builders<KanbanCard>.Filter.Or(notInResolved, resolvedButRecent);
     }
 }

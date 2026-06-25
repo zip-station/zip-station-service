@@ -320,6 +320,10 @@ public class TicketMaxController : BaseController
             CardNumber = cardNumber,
             ColumnId = columnId,
             Position = maxPos + PositionStep,
+            // "Add to backlog" lands the story in the Backlog (off the board) for prioritization,
+            // not straight onto the active board.
+            Status = KanbanStoryStatus.Backlog,
+            BacklogPosition = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             Title = title,
             DescriptionHtml = descriptionHtml,
             Type = cardType,

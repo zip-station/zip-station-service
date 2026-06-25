@@ -132,6 +132,12 @@ public static class MongoIndexes
             new CreateIndexModel<KanbanCard>(Builders<KanbanCard>.IndexKeys.Ascending(c => c.LinkedTicketIds)),
             new CreateIndexModel<KanbanCard>(Builders<KanbanCard>.IndexKeys.Ascending(c => c.LinkedStoryIds)),
             new CreateIndexModel<KanbanCard>(Builders<KanbanCard>.IndexKeys.Ascending(c => c.AssignedToUserId)),
+            // Cross-project backlog grid: scope by company + project, filter by status, hand-order.
+            new CreateIndexModel<KanbanCard>(Builders<KanbanCard>.IndexKeys.Combine(
+                Builders<KanbanCard>.IndexKeys.Ascending(c => c.CompanyId),
+                Builders<KanbanCard>.IndexKeys.Ascending(c => c.ProjectId),
+                Builders<KanbanCard>.IndexKeys.Ascending(c => c.Status),
+                Builders<KanbanCard>.IndexKeys.Ascending(c => c.BacklogPosition))),
         });
 
         // One-time, idempotent migration: story type used to be a closed enum stored as a BSON

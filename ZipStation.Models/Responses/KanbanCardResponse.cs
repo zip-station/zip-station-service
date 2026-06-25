@@ -11,6 +11,8 @@ public class KanbanCardResponse
     public long CardNumber { get; set; }
     public string ColumnId { get; set; } = string.Empty;
     public double Position { get; set; }
+    public KanbanStoryStatus Status { get; set; }
+    public double BacklogPosition { get; set; }
     public string Title { get; set; } = string.Empty;
     public string? DescriptionHtml { get; set; }
     public string Type { get; set; } = string.Empty;

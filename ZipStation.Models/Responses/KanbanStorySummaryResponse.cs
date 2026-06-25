@@ -15,4 +15,11 @@ public class KanbanStorySummaryResponse
     public string? ColumnName { get; set; }
     public bool IsResolved { get; set; }
     public string? AssignedToUserId { get; set; }
+    public KanbanStoryStatus Status { get; set; }
+    public double BacklogPosition { get; set; }
+    public List<string> Tags { get; set; } = new();
+    public List<KanbanCardExternalSourceResponse> ExternalSources { get; set; } = new();
+    public long UpdatedOnDateTime { get; set; }
+    public long CreatedOnDateTime { get; set; }
+    public string BoardId { get; set; } = string.Empty;
 }

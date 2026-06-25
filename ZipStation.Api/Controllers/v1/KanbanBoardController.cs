@@ -276,8 +276,7 @@ public class KanbanBoardController : BaseController
         [FromQuery] string? type = null,
         [FromQuery] List<string>? tags = null,
         [FromQuery] bool? hasLinkedTickets = null,
-        [FromQuery] long? createdSince = null,
-        [FromQuery] bool includeArchived = false)
+        [FromQuery] long? createdSince = null)
     {
         try
         {
@@ -285,8 +284,6 @@ public class KanbanBoardController : BaseController
             if (gw.ResponseStatus != GatewayResponseCodes.Ok) return ProcessGatewayResponse(gw);
 
             var board = await GetOrCreateBoardAsync(companyId, projectId);
-            var project = await _projectRepository.GetAsync(projectId);
-            var archiveDays = project?.Settings?.KanbanArchiveDays ?? 3;
 
             var resolvedAssignee = assignedTo;
             if (assignedTo == "me")
@@ -305,9 +302,11 @@ public class KanbanBoardController : BaseController
                 if (externalSource != null) textQuery = null;
             }
 
+            // The board only renders committed (in-progress) and resolved work; backlog,
+            // unreviewed, archived and obsolete stories live in the cross-project backlog grid.
             var cards = await _cardRepository.SearchAsync(
                 board.Id, textQuery, columnId, resolvedAssignee, type, tags, hasLinkedTickets,
-                createdSince, includeArchived, archiveDays, board.ResolvedColumnId, externalSource);
+                createdSince, KanbanStatusRules.BoardStatuses, externalSource);
 
             return Ok(_mapper.Map<List<KanbanCardResponse>>(cards));
         }
@@ -338,9 +337,17 @@ public class KanbanBoardController : BaseController
             if (cardType == null)
                 return BadRequest(new BadRequestResponse { Message = "Unknown story type" });
 
-            var targetColumnId = !string.IsNullOrEmpty(request.ColumnId) && board.Columns.Any(c => c.Id == request.ColumnId)
+            // Creating a card directly into a board column (the board's "+" button, or an explicit
+            // status request) puts it on the board as Committed; creating without a column (the
+            // backlog grid) drops it into the Backlog. The status request wins when both are given.
+            var placedOnBoard = !string.IsNullOrEmpty(request.ColumnId) && board.Columns.Any(c => c.Id == request.ColumnId);
+            var targetColumnId = placedOnBoard
                 ? request.ColumnId
-                : board.ResolveIntakeColumnId();
+                : (KanbanStatusRules.ResolveCommitColumnId(board) ?? board.ResolveIntakeColumnId());
+
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var status = request.Status ?? (placedOnBoard ? KanbanStoryStatus.Committed : KanbanStoryStatus.Backlog);
+            if (placedOnBoard && targetColumnId == board.ResolvedColumnId) status = KanbanStoryStatus.Resolved;
 
             var minPos = await _cardRepository.GetMinPositionInColumnAsync(board.Id, targetColumnId);
             var cardNumber = await _cardNumberCounterRepository.GetNextCardNumberAsync(projectId);
@@ -354,6 +361,10 @@ public class KanbanBoardController : BaseController
                 CardNumber = cardNumber,
                 ColumnId = targetColumnId,
                 Position = (minPos ?? PositionStep) - PositionStep,
+                Status = status,
+                // Explicit rank (add-to-top/bottom from the backlog grid) wins; otherwise seed from
+                // creation time so new items append in order. Drag-to-prioritize rewrites it later.
+                BacklogPosition = request.BacklogPosition ?? now,
                 Title = request.Title.Trim(),
                 DescriptionHtml = request.DescriptionHtml,
                 Type = cardType,
@@ -362,15 +373,13 @@ public class KanbanBoardController : BaseController
                 AssignedToUserId = request.AssignedToUserId,
                 LinkedTicketIds = request.LinkedTicketIds ?? new List<string>(),
                 CreatedByUserId = currentUser?.Id,
-                ResolvedOnDateTime = targetColumnId == board.ResolvedColumnId
-                    ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                    : 0,
+                ResolvedOnDateTime = status == KanbanStoryStatus.Resolved ? now : 0,
             };
 
             var created = await _cardRepository.CreateAsync(card);
             await _auditService.LogAsync(companyId, projectId, "Created", "KanbanCard", created.Id, _appUser, $"STR-{cardNumber}: {card.Title}");
 
-            if (created.ColumnId == board.ResolvedColumnId && created.LinkedTicketIds.Count > 0)
+            if (created.Status == KanbanStoryStatus.Resolved && created.LinkedTicketIds.Count > 0)
                 await NotifyLinkedTicketsAsync(created, companyId, currentUser, "marked linked story", "as resolved.");
 
             return Ok(_mapper.Map<KanbanCardResponse>(created));
@@ -495,6 +504,8 @@ public class KanbanBoardController : BaseController
 
             var board = await GetOrCreateBoardAsync(companyId, projectId);
             var previousColumnId = card.ColumnId;
+            var previousStatus = card.Status;
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
             if (request.Title != null) card.Title = request.Title.Trim();
             if (request.DescriptionHtml != null) card.DescriptionHtml = request.DescriptionHtml;
@@ -510,31 +521,52 @@ public class KanbanBoardController : BaseController
             if (request.ClearAssignee == true) card.AssignedToUserId = null;
             else if (request.AssignedToUserId != null) card.AssignedToUserId = request.AssignedToUserId;
 
-            if (request.ColumnId != null && request.ColumnId != card.ColumnId)
-            {
-                if (!board.Columns.Any(c => c.Id == request.ColumnId))
-                    return BadRequest(new BadRequestResponse { Message = "Column not found on this board" });
-                card.ColumnId = request.ColumnId;
-            }
+            // Backlog grid ordering — independent of the on-board column position.
+            if (request.BacklogPosition.HasValue) card.BacklogPosition = request.BacklogPosition.Value;
 
-            if (request.Position.HasValue)
+            if (request.Status.HasValue && request.Status.Value != card.Status)
             {
-                card.Position = request.Position.Value;
+                // Explicit lifecycle transition (commit / obsolete / archive / resolve / send to
+                // backlog / mark reviewed). The plan owns any column move + resolved-timestamp.
+                var plan = KanbanStatusRules.PlanStatusChange(card, request.Status.Value, board, now);
+                card.Status = plan.Status;
+                if (plan.MoveToColumnId != null) card.ColumnId = plan.MoveToColumnId;
+                if (plan.PlaceAtBoardEntry)
+                {
+                    var maxPos = await _cardRepository.GetMaxPositionInColumnAsync(board.Id, card.ColumnId);
+                    card.Position = maxPos + PositionStep;
+                }
+                if (plan.ResolvedChanged) card.ResolvedOnDateTime = plan.ResolvedOnDateTime;
             }
-            else if (request.ColumnId != null && request.ColumnId != previousColumnId)
+            else
             {
-                var maxPos = await _cardRepository.GetMaxPositionInColumnAsync(board.Id, card.ColumnId);
-                card.Position = maxPos + PositionStep;
+                // No explicit status — a drag on the board. Move the column, then sync status so
+                // crossing the resolved column resolves/re-commits the card.
+                if (request.ColumnId != null && request.ColumnId != card.ColumnId)
+                {
+                    if (!board.Columns.Any(c => c.Id == request.ColumnId))
+                        return BadRequest(new BadRequestResponse { Message = "Column not found on this board" });
+                    card.ColumnId = request.ColumnId;
+                }
+
+                if (request.Position.HasValue)
+                {
+                    card.Position = request.Position.Value;
+                }
+                else if (request.ColumnId != null && request.ColumnId != previousColumnId)
+                {
+                    var maxPos = await _cardRepository.GetMaxPositionInColumnAsync(board.Id, card.ColumnId);
+                    card.Position = maxPos + PositionStep;
+                }
+
+                KanbanStatusRules.SyncStatusForColumnMove(card, previousColumnId, board, now);
             }
 
             var currentUser = await _userRepository.GetByFirebaseUserIdAsync(_appUser.UserId!);
             card.UpdatedByUserId = currentUser?.Id;
 
-            var movedIntoResolved = previousColumnId != board.ResolvedColumnId && card.ColumnId == board.ResolvedColumnId;
-            var movedOutOfResolved = previousColumnId == board.ResolvedColumnId && card.ColumnId != board.ResolvedColumnId;
-
-            if (movedIntoResolved) card.ResolvedOnDateTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            if (movedOutOfResolved) card.ResolvedOnDateTime = 0;
+            var movedIntoResolved = previousStatus != KanbanStoryStatus.Resolved && card.Status == KanbanStoryStatus.Resolved;
+            var movedOutOfResolved = previousStatus == KanbanStoryStatus.Resolved && card.Status != KanbanStoryStatus.Resolved;
 
             var updated = await _cardRepository.UpdateAsync(card);
             await _auditService.LogAsync(companyId, projectId, "Updated", "KanbanCard", updated.Id, _appUser, $"STR-{card.CardNumber}");
@@ -1136,6 +1168,14 @@ public class CreateKanbanCardRequest
     public List<string>? Tags { get; set; }
     public string? AssignedToUserId { get; set; }
     public List<string>? LinkedTicketIds { get; set; }
+
+    /// Lifecycle bucket to create the card in. Null lets the server choose: Committed when a board
+    /// ColumnId is supplied, otherwise Backlog.
+    public KanbanStoryStatus? Status { get; set; }
+
+    /// Explicit backlog rank (e.g. add-to-top / add-to-bottom from the backlog grid). Null seeds
+    /// it from creation time so new items append in order.
+    public double? BacklogPosition { get; set; }
 }
 
 public class UpdateKanbanCardRequest
@@ -1149,6 +1189,13 @@ public class UpdateKanbanCardRequest
     public bool? ClearAssignee { get; set; }
     public string? ColumnId { get; set; }
     public double? Position { get; set; }
+
+    /// Explicit lifecycle transition. When set, the server applies the commit/obsolete/archive/
+    /// resolve/backlog move (including any column change) and ignores ColumnId/Position.
+    public KanbanStoryStatus? Status { get; set; }
+
+    /// Hand-ordering rank within the backlog grid (drag-to-prioritize).
+    public double? BacklogPosition { get; set; }
 }
 
 public class AddKanbanCardCommentRequest
