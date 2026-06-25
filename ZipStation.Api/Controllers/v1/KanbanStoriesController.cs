@@ -151,6 +151,7 @@ public class KanbanStoriesController : BaseController
         [FromQuery] List<string>? projectIds = null,
         [FromQuery] List<string>? boardIds = null,
         [FromQuery] List<string>? status = null,
+        [FromQuery] string? columnId = null,
         [FromQuery] string? type = null,
         [FromQuery] TicketPriority? priority = null,
         [FromQuery] List<string>? tags = null,
@@ -183,6 +184,10 @@ public class KanbanStoriesController : BaseController
 
             if (boardIds != null && boardIds.Count > 0)
                 filter &= f.In(c => c.BoardId, boardIds);
+
+            // Column ids are globally-unique ObjectIds, so this filters correctly even cross-board.
+            if (!string.IsNullOrWhiteSpace(columnId))
+                filter &= f.Eq(c => c.ColumnId, columnId);
 
             if (!string.IsNullOrWhiteSpace(type))
                 filter &= f.Eq(c => c.Type, type);
