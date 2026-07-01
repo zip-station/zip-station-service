@@ -109,19 +109,29 @@ public class KanbanStoriesController : BaseController
 
             if (!string.IsNullOrWhiteSpace(query))
             {
-                var trimmed = query.Trim().TrimStart('#');
-                var regex = new MongoDB.Bson.BsonRegularExpression(System.Text.RegularExpressions.Regex.Escape(trimmed), "i");
-                var orFilters = new List<FilterDefinition<KanbanCard>>
+                // A pasted external-source link (e.g. a Discord forum post) matches against the
+                // card's ExternalSources rather than its title/number.
+                var externalSource = ExternalSourceSearch.Parse(query.Trim());
+                if (externalSource != null)
                 {
-                    Builders<KanbanCard>.Filter.Regex(c => c.Title, regex),
-                };
+                    filter &= ExternalSourceSearch.MatchFilter(externalSource);
+                }
+                else
+                {
+                    var trimmed = query.Trim().TrimStart('#');
+                    var regex = new MongoDB.Bson.BsonRegularExpression(System.Text.RegularExpressions.Regex.Escape(trimmed), "i");
+                    var orFilters = new List<FilterDefinition<KanbanCard>>
+                    {
+                        Builders<KanbanCard>.Filter.Regex(c => c.Title, regex),
+                    };
 
-                // Match STR-NN or NN
-                var numberPart = trimmed.StartsWith("STR-", StringComparison.OrdinalIgnoreCase) ? trimmed[4..] : trimmed;
-                if (long.TryParse(numberPart.TrimStart('0'), out var num) && num > 0)
-                    orFilters.Add(Builders<KanbanCard>.Filter.Eq(c => c.CardNumber, num));
+                    // Match STR-NN or NN
+                    var numberPart = trimmed.StartsWith("STR-", StringComparison.OrdinalIgnoreCase) ? trimmed[4..] : trimmed;
+                    if (long.TryParse(numberPart.TrimStart('0'), out var num) && num > 0)
+                        orFilters.Add(Builders<KanbanCard>.Filter.Eq(c => c.CardNumber, num));
 
-                filter &= Builders<KanbanCard>.Filter.Or(orFilters);
+                    filter &= Builders<KanbanCard>.Filter.Or(orFilters);
+                }
             }
 
             var cards = await collection.Find(filter)
@@ -213,17 +223,28 @@ public class KanbanStoriesController : BaseController
 
             if (!string.IsNullOrWhiteSpace(query))
             {
-                var trimmed = query.Trim().TrimStart('#');
-                var regex = new MongoDB.Bson.BsonRegularExpression(System.Text.RegularExpressions.Regex.Escape(trimmed), "i");
-                var orFilters = new List<FilterDefinition<KanbanCard>>
+                // A pasted external-source link (e.g. a Discord forum post) matches against each
+                // card's ExternalSources instead of title/description. Intake cards live here in
+                // the backlog (Unreviewed), so this is the surface where link search must work.
+                var externalSource = ExternalSourceSearch.Parse(query.Trim());
+                if (externalSource != null)
                 {
-                    f.Regex(c => c.Title, regex),
-                    f.Regex(c => c.DescriptionHtml, regex),
-                };
-                var numberPart = trimmed.StartsWith("STR-", StringComparison.OrdinalIgnoreCase) ? trimmed[4..] : trimmed;
-                if (long.TryParse(numberPart.TrimStart('0'), out var num) && num > 0)
-                    orFilters.Add(f.Eq(c => c.CardNumber, num));
-                filter &= f.Or(orFilters);
+                    filter &= ExternalSourceSearch.MatchFilter(externalSource);
+                }
+                else
+                {
+                    var trimmed = query.Trim().TrimStart('#');
+                    var regex = new MongoDB.Bson.BsonRegularExpression(System.Text.RegularExpressions.Regex.Escape(trimmed), "i");
+                    var orFilters = new List<FilterDefinition<KanbanCard>>
+                    {
+                        f.Regex(c => c.Title, regex),
+                        f.Regex(c => c.DescriptionHtml, regex),
+                    };
+                    var numberPart = trimmed.StartsWith("STR-", StringComparison.OrdinalIgnoreCase) ? trimmed[4..] : trimmed;
+                    if (long.TryParse(numberPart.TrimStart('0'), out var num) && num > 0)
+                        orFilters.Add(f.Eq(c => c.CardNumber, num));
+                    filter &= f.Or(orFilters);
+                }
             }
 
             var sortDef = BuildBacklogSort(sort, dir);
@@ -306,7 +327,8 @@ public class KanbanStoriesController : BaseController
                 {
                     var plan = KanbanStatusRules.PlanStatusChange(card, request.Status.Value, board, now);
                     card.Status = plan.Status;
-                    if (plan.MoveToColumnId != null) card.ColumnId = plan.MoveToColumnId;
+                    if (plan.ClearColumn) card.ColumnId = string.Empty;
+                    else if (plan.MoveToColumnId != null) card.ColumnId = plan.MoveToColumnId;
                     if (plan.PlaceAtBoardEntry)
                     {
                         var maxPos = await _cardRepository.GetMaxPositionInColumnAsync(board.Id, card.ColumnId);

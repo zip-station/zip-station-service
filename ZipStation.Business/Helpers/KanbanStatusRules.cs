@@ -8,9 +8,11 @@ namespace ZipStation.Business.Helpers;
 /// and the "now" timestamp and apply the returned plan (fetching column positions themselves).
 public static class KanbanStatusRules
 {
-    /// What the backlog grid shows when the caller doesn't specify a status filter.
+    /// What the backlog grid shows when the caller doesn't specify a status filter. Includes
+    /// Unreviewed so freshly-imported (e.g. Discord) intake is visible by default and doesn't look
+    /// like it never arrived — the triage queue is front-and-center, not hidden behind a chip.
     public static readonly IReadOnlyList<KanbanStoryStatus> DefaultGridStatuses =
-        new[] { KanbanStoryStatus.Backlog, KanbanStoryStatus.Committed };
+        new[] { KanbanStoryStatus.Unreviewed, KanbanStoryStatus.Backlog, KanbanStoryStatus.Committed };
 
     /// Statuses the kanban board (columns) renders. Everything else lives only in the grid.
     public static readonly IReadOnlyList<KanbanStoryStatus> BoardStatuses =
@@ -79,23 +81,26 @@ public static class KanbanStatusRules
                 };
 
             case KanbanStoryStatus.Archived:
-                // Filed away. Keep it where it is; stamp the resolution time if it wasn't already
-                // (manual archive of something that never passed through the resolved column).
+                // Filed away — off the board, so it no longer belongs to a column. Stamp the
+                // resolution time if it wasn't already (manual archive of something that never
+                // passed through the resolved column).
                 return new StatusChangePlan
                 {
                     Status = target,
                     MoveToColumnId = null,
+                    ClearColumn = true,
                     PlaceAtBoardEntry = false,
                     ResolvedChanged = card.ResolvedOnDateTime == 0,
                     ResolvedOnDateTime = nowUnixMs,
                 };
 
-            // Backlog, Unreviewed, Obsolete — all leave the board; clear resolution.
+            // Backlog, Unreviewed, Obsolete — all leave the board; clear the column and resolution.
             default:
                 return new StatusChangePlan
                 {
                     Status = target,
                     MoveToColumnId = null,
+                    ClearColumn = true,
                     PlaceAtBoardEntry = false,
                     ResolvedChanged = card.ResolvedOnDateTime != 0,
                     ResolvedOnDateTime = 0,
@@ -131,6 +136,11 @@ public sealed class StatusChangePlan
 
     /// Column to move the card into, or null to leave it where it is.
     public string? MoveToColumnId { get; init; }
+
+    /// When true the card is leaving the board, so the caller clears its <c>ColumnId</c> — off-board
+    /// statuses (Unreviewed / Backlog / Archived / Obsolete) don't belong to any column. Takes
+    /// precedence over <see cref="MoveToColumnId"/> (which stays null in that case).
+    public bool ClearColumn { get; init; }
 
     /// When true the caller assigns a fresh board position (max-in-column + step) after the move.
     public bool PlaceAtBoardEntry { get; init; }

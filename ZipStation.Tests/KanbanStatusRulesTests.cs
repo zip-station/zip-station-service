@@ -30,7 +30,7 @@ public class KanbanStatusRulesTests
         Assert.Equal(KanbanStatusRules.DefaultGridStatuses, KanbanStatusRules.ParseStatusFilter(null));
         Assert.Equal(KanbanStatusRules.DefaultGridStatuses, KanbanStatusRules.ParseStatusFilter(new List<string>()));
         Assert.Equal(
-            new[] { KanbanStoryStatus.Backlog, KanbanStoryStatus.Committed },
+            new[] { KanbanStoryStatus.Unreviewed, KanbanStoryStatus.Backlog, KanbanStoryStatus.Committed },
             KanbanStatusRules.ParseStatusFilter(null));
     }
 
@@ -133,13 +133,14 @@ public class KanbanStatusRulesTests
     }
 
     [Fact]
-    public void PlanStatusChange_Archive_KeepsColumnAndStampsTimeOnlyIfUnset()
+    public void PlanStatusChange_Archive_ClearsColumnAndStampsTimeOnlyIfUnset()
     {
         var board = BoardWith3Columns();
 
         var fromResolved = new KanbanCard { Status = KanbanStoryStatus.Resolved, ColumnId = "done", ResolvedOnDateTime = 999 };
         var plan1 = KanbanStatusRules.PlanStatusChange(fromResolved, KanbanStoryStatus.Archived, board, Now);
         Assert.Equal(KanbanStoryStatus.Archived, plan1.Status);
+        Assert.True(plan1.ClearColumn); // off the board — drop the column
         Assert.Null(plan1.MoveToColumnId);
         Assert.False(plan1.PlaceAtBoardEntry);
         Assert.False(plan1.ResolvedChanged); // already had a resolved time — keep it
@@ -154,7 +155,7 @@ public class KanbanStatusRulesTests
     [InlineData(KanbanStoryStatus.Backlog)]
     [InlineData(KanbanStoryStatus.Unreviewed)]
     [InlineData(KanbanStoryStatus.Obsolete)]
-    public void PlanStatusChange_OffBoardStatuses_ClearResolvedAndDoNotMove(KanbanStoryStatus target)
+    public void PlanStatusChange_OffBoardStatuses_ClearColumnAndResolvedAndDoNotMove(KanbanStoryStatus target)
     {
         var board = BoardWith3Columns();
         var card = new KanbanCard { Status = KanbanStoryStatus.Resolved, ColumnId = "done", ResolvedOnDateTime = 123 };
@@ -162,10 +163,23 @@ public class KanbanStatusRulesTests
         var plan = KanbanStatusRules.PlanStatusChange(card, target, board, Now);
 
         Assert.Equal(target, plan.Status);
+        Assert.True(plan.ClearColumn);
         Assert.Null(plan.MoveToColumnId);
         Assert.False(plan.PlaceAtBoardEntry);
         Assert.True(plan.ResolvedChanged);
         Assert.Equal(0, plan.ResolvedOnDateTime);
+    }
+
+    [Fact]
+    public void PlanStatusChange_Commit_DoesNotClearColumn()
+    {
+        var board = BoardWith3Columns();
+        var card = new KanbanCard { Status = KanbanStoryStatus.Backlog, ColumnId = "" };
+
+        var plan = KanbanStatusRules.PlanStatusChange(card, KanbanStoryStatus.Committed, board, Now);
+
+        Assert.False(plan.ClearColumn);
+        Assert.Equal("todo", plan.MoveToColumnId);
     }
 
     // ---- SyncStatusForColumnMove ----
