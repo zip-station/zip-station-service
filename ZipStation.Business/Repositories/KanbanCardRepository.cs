@@ -1,4 +1,5 @@
 using MongoDB.Driver;
+using ZipStation.Business.Helpers;
 using ZipStation.Models.Entities;
 using ZipStation.Models.Enums;
 
@@ -49,7 +50,7 @@ public class KanbanCardRepository : BaseRepository<KanbanCard>, IKanbanCardRepos
                    & Builders<KanbanCard>.Filter.Eq(c => c.IsVoid, false);
 
         if (externalSource != null)
-            filter &= BuildExternalSourceFilter(externalSource);
+            filter &= ExternalSourceSearch.MatchFilter(externalSource);
 
         if (!string.IsNullOrWhiteSpace(columnId))
             filter &= Builders<KanbanCard>.Filter.Eq(c => c.ColumnId, columnId);
@@ -163,30 +164,5 @@ public class KanbanCardRepository : BaseRepository<KanbanCard>, IKanbanCardRepos
                    & Builders<KanbanCard>.Filter.Eq(c => c.Type, type)
                    & Builders<KanbanCard>.Filter.Eq(c => c.IsVoid, false);
         return await _Collection.CountDocumentsAsync(filter) > 0;
-    }
-
-    /// Match cards whose ExternalSources contain an entry pointing at the same external
-    /// resource. We compare on the identifier segments (message/thread/channel) rather than
-    /// the raw URL string, so a thread link, a full message link, and a forum-channel link
-    /// that resolve to the same post all match regardless of trailing slashes or subdomain.
-    private static FilterDefinition<KanbanCard> BuildExternalSourceFilter(KanbanCardExternalSource source)
-    {
-        var ids = new[] { source.MessageId, source.ThreadId, source.ChannelId }
-            .Where(id => !string.IsNullOrWhiteSpace(id))
-            .Select(id => id!)
-            .Distinct()
-            .ToList();
-
-        var es = Builders<KanbanCardExternalSource>.Filter;
-        var elem = es.Eq(s => s.Type, source.Type);
-        if (ids.Count > 0)
-        {
-            elem &= es.Or(
-                es.In(s => s.MessageId, ids),
-                es.In(s => s.ThreadId, ids),
-                es.In(s => s.ChannelId, ids));
-        }
-
-        return Builders<KanbanCard>.Filter.ElemMatch(c => c.ExternalSources, elem);
     }
 }

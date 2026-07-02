@@ -298,7 +298,7 @@ public class KanbanBoardController : BaseController
             KanbanCardExternalSource? externalSource = null;
             if (!string.IsNullOrWhiteSpace(query))
             {
-                externalSource = ParseExternalSourceUrl(query.Trim());
+                externalSource = ExternalSourceSearch.Parse(query.Trim());
                 if (externalSource != null) textQuery = null;
             }
 
@@ -530,7 +530,8 @@ public class KanbanBoardController : BaseController
                 // backlog / mark reviewed). The plan owns any column move + resolved-timestamp.
                 var plan = KanbanStatusRules.PlanStatusChange(card, request.Status.Value, board, now);
                 card.Status = plan.Status;
-                if (plan.MoveToColumnId != null) card.ColumnId = plan.MoveToColumnId;
+                if (plan.ClearColumn) card.ColumnId = string.Empty;
+                else if (plan.MoveToColumnId != null) card.ColumnId = plan.MoveToColumnId;
                 if (plan.PlaceAtBoardEntry)
                 {
                     var maxPos = await _cardRepository.GetMaxPositionInColumnAsync(board.Id, card.ColumnId);
@@ -817,7 +818,7 @@ public class KanbanBoardController : BaseController
 
             // Recognized sources (currently Discord) get rich parsing; anything else that's a
             // valid http/https URL is pinned as a generic Link.
-            var parsed = ParseExternalSourceUrl(url);
+            var parsed = ExternalSourceSearch.Parse(url);
             if (parsed == null)
             {
                 if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)
@@ -987,40 +988,6 @@ public class KanbanBoardController : BaseController
     ///   - https://discord.com/channels/{guild}/{x}           (2 segments — x is a thread or channel id)
     ///   - https://discord.com/channels/{guild}/{channel}/{m} (3 segments — full message URL)
     /// Also tolerates discordapp.com (legacy) and ptb./canary. subdomains.
-    private static readonly System.Text.RegularExpressions.Regex _discordUrlPattern = new(
-        @"^https?://(?:[a-z]+\.)?discord(?:app)?\.com/channels/(\d+)/(\d+)(?:/(\d+))?/?(?:\?.*)?$",
-        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
-
-    /// Parse a pasted URL into a KanbanCardExternalSource. Returns null when the URL isn't
-    /// a recognized source type — caller surfaces a friendly error to the SPA.
-    private static KanbanCardExternalSource? ParseExternalSourceUrl(string url)
-    {
-        var m = _discordUrlPattern.Match(url);
-        if (!m.Success) return null;
-
-        var guildId = m.Groups[1].Value;
-        var second = m.Groups[2].Value;
-        var third = m.Groups[3].Success ? m.Groups[3].Value : null;
-
-        // 3-segment = full message URL; 2-segment = thread URL (most common forum case).
-        // We can't distinguish a thread from a regular channel without an API call, so we
-        // optimistically treat the 2-segment form as a forum thread (where threadId == starter messageId).
-        var channelId = third != null ? second : (string?)null;
-        var threadId = third != null ? second : second;
-        var messageId = third ?? second;
-
-        return new KanbanCardExternalSource
-        {
-            Type = ExternalSourceType.Discord,
-            Url = url,
-            GuildId = guildId,
-            ChannelId = channelId,
-            ThreadId = threadId,
-            MessageId = messageId,
-            ForumTags = new List<string>(),
-        };
-    }
-
     private async Task<List<KanbanCard>> LoadLinkedStoriesAsync(List<string> cardIds, string companyId)
     {
         // Skip self-references / already-voided cards. Stale ids are tolerated silently —

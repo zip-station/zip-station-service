@@ -294,9 +294,7 @@ public class TicketMaxController : BaseController
     private async Task<(bool ok, string error)> ExecuteAddToBacklogAsync(Ticket ticket, MaxTask task, User? currentUser)
     {
         var board = await GetOrCreateBoardAsync(ticket.CompanyId, ticket.ProjectId);
-        var columnId = board.ResolveIntakeColumnId();
         var cardNumber = await _kanbanCardNumberCounterRepository.GetNextCardNumberAsync(ticket.ProjectId);
-        var maxPos = await _kanbanCardRepository.GetMaxPositionInColumnAsync(board.Id, columnId);
 
         var typeName = task.Details.SuggestedKanbanType ?? KanbanCardTypes.Improvement;
         // Max suggests by built-in name; anything unrecognized falls back to Improvement.
@@ -318,10 +316,10 @@ public class TicketMaxController : BaseController
             ProjectId = ticket.ProjectId,
             BoardId = board.Id,
             CardNumber = cardNumber,
-            ColumnId = columnId,
-            Position = maxPos + PositionStep,
-            // "Add to backlog" lands the story in the Backlog (off the board) for prioritization,
-            // not straight onto the active board.
+            // "Add to backlog" lands the story in the Backlog — off the board, so no column. The
+            // grid orders it by BacklogPosition; a column is assigned only when it's committed.
+            ColumnId = string.Empty,
+            Position = 0,
             Status = KanbanStoryStatus.Backlog,
             BacklogPosition = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             Title = title,
