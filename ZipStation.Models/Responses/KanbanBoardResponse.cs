@@ -7,7 +7,6 @@ public class KanbanBoardResponse
     public string ProjectId { get; set; } = string.Empty;
     public List<KanbanColumnResponse> Columns { get; set; } = new();
     public string ResolvedColumnId { get; set; } = string.Empty;
-    public string IntakeColumnId { get; set; } = string.Empty;
     public List<KanbanCardTypeResponse> CustomCardTypes { get; set; } = new();
     public long CreatedOnDateTime { get; set; }
     public long UpdatedOnDateTime { get; set; }

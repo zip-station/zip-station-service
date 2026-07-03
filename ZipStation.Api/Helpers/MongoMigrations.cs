@@ -1,3 +1,4 @@
+using MongoDB.Bson;
 using MongoDB.Driver;
 using Serilog;
 using ZipStation.Business.Helpers;
@@ -14,6 +15,7 @@ public static class MongoMigrations
     {
         await BackfillKanbanCardStatusAsync(database, appConfig);
         await ClearOffBoardColumnIdAsync(database, appConfig);
+        await DropIntakeColumnIdAsync(database, appConfig);
     }
 
     /// Stories existed before <see cref="KanbanCard.Status"/> did. Those documents have no `status`
@@ -53,5 +55,21 @@ public static class MongoMigrations
         var result = await cards.UpdateManyAsync(filter, update);
         if (result.ModifiedCount > 0)
             Log.Information("Migration: cleared stale ColumnId on {Count} off-board kanban cards", result.ModifiedCount);
+    }
+
+    /// The per-board "intake column" setting was retired — automated intake now lands off the board
+    /// (no column), so the field no longer means anything. Drop it from existing board documents.
+    /// Uses a raw BSON collection since the property no longer exists on <see cref="KanbanBoard"/>.
+    /// Idempotent: once unset, the filter matches nothing.
+    private static async Task DropIntakeColumnIdAsync(IMongoDatabase database, AppConfig appConfig)
+    {
+        var boards = database.GetCollection<BsonDocument>(appConfig.ZipStationMongoDb.Collections.KanbanBoards);
+
+        var filter = Builders<BsonDocument>.Filter.Exists("intakeColumnId");
+        var update = Builders<BsonDocument>.Update.Unset("intakeColumnId");
+
+        var result = await boards.UpdateManyAsync(filter, update);
+        if (result.ModifiedCount > 0)
+            Log.Information("Migration: dropped retired intakeColumnId from {Count} kanban boards", result.ModifiedCount);
     }
 }
