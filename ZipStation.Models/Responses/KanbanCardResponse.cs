@@ -27,6 +27,7 @@ public class KanbanCardResponse
     public string? CreatedByUserId { get; set; }
     public string? UpdatedByUserId { get; set; }
     public List<KanbanCardExternalSourceResponse> ExternalSources { get; set; } = new();
+    public List<MessageAttachmentResponse>? Attachments { get; set; }
 }
 
 public class KanbanCardExternalSourceResponse

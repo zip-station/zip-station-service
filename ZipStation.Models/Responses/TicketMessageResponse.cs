@@ -27,4 +27,8 @@ public class MessageAttachmentResponse
     public string FileName { get; set; } = string.Empty;
     public string ContentType { get; set; } = string.Empty;
     public long SizeBytes { get; set; }
+
+    /// Presigned download/stream URL. Only populated where the endpoint pays the cost of
+    /// generating it (e.g. kanban card detail); null elsewhere.
+    public string? Url { get; set; }
 }

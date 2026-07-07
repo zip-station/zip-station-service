@@ -64,6 +64,11 @@ public class KanbanCard : BaseEntity
     public long ResolvedOnDateTime { get; set; }
 
     public List<KanbanCardExternalSource> ExternalSources { get; set; } = new();
+
+    /// Video files pinned to the story (screen recordings of bugs, demo clips). Reuses the
+    /// ticket attachment schema; the binary lives in S3 under the StorageKey.
+    [BsonIgnoreIfNull]
+    public List<MessageAttachment>? Attachments { get; set; }
 }
 
 public class KanbanCardExternalSource

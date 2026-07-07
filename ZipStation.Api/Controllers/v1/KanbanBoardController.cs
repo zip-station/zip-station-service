@@ -28,6 +28,12 @@ public class KanbanBoardController : BaseController
     {
         "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp",
     };
+    private const long MaxVideoSize = 100 * 1024 * 1024; // 100 MB
+    // Only formats browsers can actually play back in a <video> tag.
+    private static readonly HashSet<string> AllowedVideoContentTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "video/mp4", "video/quicktime", "video/webm", "video/x-m4v",
+    };
     private static readonly Regex ImgTagPattern = new(@"<img\b[^>]*?>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex DataKeyAttrPattern = new(@"data-zs-key=""([^""]+)""", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex SrcAttrPattern = new(@"\bsrc=""[^""]*""", RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -383,6 +389,7 @@ public class KanbanBoardController : BaseController
 
             var cardResponse = _mapper.Map<KanbanCardResponse>(card);
             cardResponse.DescriptionHtml = RefreshImageUrls(cardResponse.DescriptionHtml, fileStorage);
+            PopulateAttachmentUrls(card, cardResponse, fileStorage);
 
             var commentResponses = _mapper.Map<List<KanbanCardCommentResponse>>(comments);
             foreach (var c in commentResponses)
@@ -452,6 +459,109 @@ public class KanbanBoardController : BaseController
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error uploading kanban image for project {ProjectId}", projectId);
+            return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
+        }
+    }
+
+    // ----- Attachments (video files pinned to a story) -----
+
+    [HttpPost("cards/{id}/attachments")]
+    [MapToApiVersion("1.0")]
+    [RequestSizeLimit(MaxVideoSize + 1024)]
+    [RequestFormLimits(MultipartBodyLengthLimit = MaxVideoSize + 1024)]
+    [ProducesResponseType(typeof(MessageAttachmentResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(BadRequestResponse), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> UploadCardAttachment(string companyId, string projectId, string id, IFormFile file)
+    {
+        try
+        {
+            var gw = await _gateway.CanEditAsync(companyId, projectId);
+            if (gw.ResponseStatus != GatewayResponseCodes.Ok) return ProcessGatewayResponse(gw);
+
+            var card = await _cardRepository.GetAsync(id);
+            if (card == null || card.CompanyId != companyId || card.ProjectId != projectId) return NotFound();
+
+            if (file == null || file.Length == 0)
+                return BadRequest(new BadRequestResponse { Message = "No file provided" });
+            if (file.Length > MaxVideoSize)
+                return BadRequest(new BadRequestResponse { Message = "Video exceeds 100MB limit" });
+            if (!AllowedVideoContentTypes.Contains(file.ContentType))
+                return BadRequest(new BadRequestResponse { Message = "Unsupported video type. Use MP4, MOV, WebM, or M4V." });
+
+            var project = await _projectRepository.GetAsync(projectId);
+            if (project == null || project.CompanyId != companyId) return NotFound();
+            if (project.Settings?.FileStorage == null || string.IsNullOrEmpty(project.Settings.FileStorage.BucketName))
+                return BadRequest(new BadRequestResponse { Message = "File storage not configured for this project" });
+
+            var safeName = SanitizeFileName(file.FileName);
+            var storageKey = $"{companyId}/{projectId}/kanban-attachments/{card.Id}/{MongoDB.Bson.ObjectId.GenerateNewId()}_{safeName}";
+
+            using (var stream = file.OpenReadStream())
+                await _fileStorageService.UploadAsync(project.Settings.FileStorage, storageKey, stream, file.ContentType);
+
+            var attachment = new MessageAttachment
+            {
+                FileName = file.FileName,
+                ContentType = file.ContentType,
+                SizeBytes = file.Length,
+                StorageKey = storageKey,
+            };
+            card.Attachments ??= new List<MessageAttachment>();
+            card.Attachments.Add(attachment);
+            await _cardRepository.UpdateAsync(card);
+            await _auditService.LogAsync(companyId, projectId, "AttachmentAdded", "KanbanCard", card.Id, _appUser, $"STR-{card.CardNumber}: {file.FileName}");
+
+            var response = _mapper.Map<MessageAttachmentResponse>(attachment);
+            response.Url = _fileStorageService.GeneratePresignedUrl(project.Settings.FileStorage, storageKey, ImageUrlLifetime);
+            return Ok(response);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error uploading attachment to kanban card {CardId}", id);
+            return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
+        }
+    }
+
+    [HttpDelete("cards/{id}/attachments/{attachmentId}")]
+    [MapToApiVersion("1.0")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeleteCardAttachment(string companyId, string projectId, string id, string attachmentId)
+    {
+        try
+        {
+            var gw = await _gateway.CanEditAsync(companyId, projectId);
+            if (gw.ResponseStatus != GatewayResponseCodes.Ok) return ProcessGatewayResponse(gw);
+
+            var card = await _cardRepository.GetAsync(id);
+            if (card == null || card.CompanyId != companyId || card.ProjectId != projectId) return NotFound();
+
+            var attachment = card.Attachments?.FirstOrDefault(a => a.Id == attachmentId);
+            if (attachment == null) return NotFound();
+
+            card.Attachments!.Remove(attachment);
+            await _cardRepository.UpdateAsync(card);
+            await _auditService.LogAsync(companyId, projectId, "AttachmentRemoved", "KanbanCard", card.Id, _appUser, $"STR-{card.CardNumber}: {attachment.FileName}");
+
+            // Best-effort blob cleanup — the card record is already consistent without it.
+            var fileStorage = (await _projectRepository.GetAsync(projectId))?.Settings?.FileStorage;
+            if (fileStorage != null && !string.IsNullOrEmpty(fileStorage.BucketName))
+            {
+                try
+                {
+                    await _fileStorageService.DeleteAsync(fileStorage, attachment.StorageKey);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to delete kanban attachment blob {StorageKey}", attachment.StorageKey);
+                }
+            }
+
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error deleting attachment {AttachmentId} from kanban card {CardId}", attachmentId, id);
             return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
         }
     }
@@ -981,6 +1091,28 @@ public class KanbanBoardController : BaseController
         // Fall back to literal id lookup.
         var byId = await _cardRepository.GetAsync(idOrNumber.Trim());
         return byId;
+    }
+
+    /// Stamps a fresh presigned URL onto each attachment in the response so the SPA can
+    /// stream the video directly from S3. Skips silently when storage isn't configured.
+    private void PopulateAttachmentUrls(KanbanCard card, KanbanCardResponse response, FileStorageSettings? settings)
+    {
+        if (card.Attachments == null || response.Attachments == null || settings == null || string.IsNullOrEmpty(settings.BucketName))
+            return;
+
+        var storageKeysById = card.Attachments.ToDictionary(a => a.Id, a => a.StorageKey);
+        foreach (var att in response.Attachments)
+        {
+            if (!storageKeysById.TryGetValue(att.Id, out var storageKey)) continue;
+            try
+            {
+                att.Url = _fileStorageService.GeneratePresignedUrl(settings, storageKey, ImageUrlLifetime);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to generate presigned URL for kanban attachment {StorageKey}", storageKey);
+            }
+        }
     }
 
     private string? RefreshImageUrls(string? html, FileStorageSettings? settings)
