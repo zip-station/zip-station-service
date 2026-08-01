@@ -27,6 +27,7 @@ public class PublicIntakeController : BaseController
     private readonly IMapper _mapper;
     private readonly IAlertService _alertService;
     private readonly IEmailService _emailService;
+    private readonly IUserLookupService _userLookupService;
 
     public PublicIntakeController(
         ILogger<PublicIntakeController> logger,
@@ -39,7 +40,8 @@ public class PublicIntakeController : BaseController
         ICustomerRepository customerRepository,
         IMapper mapper,
         IAlertService alertService,
-        IEmailService emailService)
+        IEmailService emailService,
+        IUserLookupService userLookupService)
     {
         _logger = logger;
         _apiKeyRepository = apiKeyRepository;
@@ -52,6 +54,7 @@ public class PublicIntakeController : BaseController
         _mapper = mapper;
         _alertService = alertService;
         _emailService = emailService;
+        _userLookupService = userLookupService;
     }
 
     [HttpPost]
@@ -175,6 +178,9 @@ public class PublicIntakeController : BaseController
         await _customerRepository.UpdateAsync(customer);
 
         _logger.LogInformation("Public API: created ticket {TicketId} from {Email}", created.Id, request.Email);
+
+        // Resolve the customer's external user id (fire-and-forget; service never throws)
+        _ = Task.Run(() => _userLookupService.LookupAndStoreAsync(project, request.Email));
 
         // Fire alerts + auto-reply in background
         _ = Task.Run(async () => {

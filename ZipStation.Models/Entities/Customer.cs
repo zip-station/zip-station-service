@@ -25,6 +25,10 @@ public class Customer : BaseEntity
 
     public Dictionary<string, string> Properties { get; set; } = new();
 
+    /// User id in the external system, resolved via the project's UserLookup settings.
+    [BsonIgnoreIfNull]
+    public string? ExternalUserId { get; set; }
+
     public int OpenTicketCount { get; set; }
 
     public int ClosedTicketCount { get; set; }

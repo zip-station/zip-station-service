@@ -413,6 +413,22 @@ public class ProjectsController : BaseController
                     project.Settings.Max.AutoSendCategories = request.Max.AutoSendCategories;
             }
 
+            if (request.UserLookup != null)
+            {
+                var existingAuthHeaderValue = project.Settings.UserLookup?.AuthHeaderValue;
+                var authHeaderValue = !string.IsNullOrEmpty(request.UserLookup.AuthHeaderValue)
+                    ? EncryptionHelper.Encrypt(request.UserLookup.AuthHeaderValue)
+                    : existingAuthHeaderValue;
+                project.Settings.UserLookup = new UserLookupSettings
+                {
+                    Enabled = request.UserLookup.Enabled,
+                    Url = request.UserLookup.Url,
+                    UserIdField = request.UserLookup.UserIdField,
+                    AuthHeaderName = request.UserLookup.AuthHeaderName,
+                    AuthHeaderValue = authHeaderValue
+                };
+            }
+
             var updated = await _projectRepository.UpdateAsync(project);
 
             _logger.LogInformation("Project settings updated: {ProjectId}", id);
@@ -612,6 +628,17 @@ public class UpdateProjectSettingsRequest
     public int? StaleTicketDays { get; set; }
     public UpdateFileStorageSettingsRequest? FileStorage { get; set; }
     public UpdateMaxSettingsRequest? Max { get; set; }
+    public UpdateUserLookupSettingsRequest? UserLookup { get; set; }
+}
+
+public class UpdateUserLookupSettingsRequest
+{
+    public bool Enabled { get; set; }
+    public string Url { get; set; } = string.Empty;
+    public string UserIdField { get; set; } = string.Empty;
+    public string? AuthHeaderName { get; set; }
+    /// Empty = keep the existing stored value.
+    public string? AuthHeaderValue { get; set; }
 }
 
 public class UpdateMaxSettingsRequest

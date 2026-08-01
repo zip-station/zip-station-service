@@ -57,6 +57,27 @@ public class ProjectSettings
     public MaxSettings? Max { get; set; }
 
     public DiscordSettings? Discord { get; set; }
+
+    public UserLookupSettings? UserLookup { get; set; }
+}
+
+/// External user lookup: when a ticket is created, call this endpoint with the customer's
+/// email and store the extracted user id on the customer record.
+public class UserLookupSettings
+{
+    public bool Enabled { get; set; }
+
+    /// Endpoint URL. A literal "{email}" placeholder is substituted; otherwise an
+    /// "email" query parameter is appended.
+    public string Url { get; set; } = string.Empty;
+
+    /// Dotted path into the JSON response pointing at the user id, e.g. "userInfo.id".
+    public string UserIdField { get; set; } = string.Empty;
+
+    public string? AuthHeaderName { get; set; }
+
+    /// Encrypted at rest, like the other project secrets.
+    public string? AuthHeaderValue { get; set; }
 }
 
 public class DiscordSettings

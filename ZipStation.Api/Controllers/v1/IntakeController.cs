@@ -36,6 +36,7 @@ public class IntakeController : BaseController
     private readonly IAlertService _alertService;
     private readonly IIntakeRuleRepository _intakeRuleRepository;
     private readonly IMaxEnrichmentService _maxEnrichmentService;
+    private readonly IUserLookupService _userLookupService;
 
     public IntakeController(
         ILogger<IntakeController> logger,
@@ -53,7 +54,8 @@ public class IntakeController : BaseController
         IEmailService emailService,
         IAlertService alertService,
         IIntakeRuleRepository intakeRuleRepository,
-        IMaxEnrichmentService maxEnrichmentService)
+        IMaxEnrichmentService maxEnrichmentService,
+        IUserLookupService userLookupService)
     {
         _logger = logger;
         _intakeEmailRepository = intakeEmailRepository;
@@ -71,6 +73,7 @@ public class IntakeController : BaseController
         _alertService = alertService;
         _intakeRuleRepository = intakeRuleRepository;
         _maxEnrichmentService = maxEnrichmentService;
+        _userLookupService = userLookupService;
     }
 
     [HttpGet]
@@ -248,6 +251,10 @@ public class IntakeController : BaseController
             var enrichTicketId = createdTicket.Id;
             _ = Task.Run(async () => { try { await _maxEnrichmentService.EnrichTicketAsync(enrichTicketId); } catch { } });
 
+            // Resolve the customer's external user id (fire-and-forget; service never throws)
+            if (project != null)
+                _ = Task.Run(() => _userLookupService.LookupAndStoreAsync(project, intake.FromEmail));
+
             // Send auto-reply if configured AND enabled
             if (project != null && !string.IsNullOrEmpty(createdTicket.CustomerEmail)
                 && project.Settings?.AutoReply != null && project.Settings.AutoReply.Enabled)
@@ -345,6 +352,11 @@ public class IntakeController : BaseController
                             // Fire Max enrichment for this newly created ticket
                             var bulkEnrichTicketId = ticket.Id;
                             _ = Task.Run(async () => { try { await _maxEnrichmentService.EnrichTicketAsync(bulkEnrichTicketId); } catch { } });
+
+                            // Resolve the customer's external user id (fire-and-forget; service never throws)
+                            var lookupProject = project;
+                            var lookupEmail = intake.FromEmail;
+                            _ = Task.Run(() => _userLookupService.LookupAndStoreAsync(lookupProject, lookupEmail));
                             break;
 
                         case "deny":

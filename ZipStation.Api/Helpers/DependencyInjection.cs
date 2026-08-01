@@ -156,5 +156,6 @@ public static class DependencyInjection
         builder.Services.AddScoped<IMaxEnrichmentService, MaxEnrichmentService>();
         builder.Services.AddScoped<IMaxStoryEnrichmentService, MaxStoryEnrichmentService>();
         builder.Services.AddScoped<IMaxToneAnalyzerService, MaxToneAnalyzerService>();
+        builder.Services.AddScoped<IUserLookupService, UserLookupService>();
     }
 }

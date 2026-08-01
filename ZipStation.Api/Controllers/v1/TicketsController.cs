@@ -38,6 +38,7 @@ public class TicketsController : BaseController
     private readonly IMongoDatabase _database;
     private readonly IMaxEnrichmentService _maxEnrichmentService;
     private readonly IMaxTaskRepository _maxTaskRepository;
+    private readonly IUserLookupService _userLookupService;
 
     public TicketsController(
         ILogger<TicketsController> logger,
@@ -56,7 +57,8 @@ public class TicketsController : BaseController
         IFileStorageService fileStorageService,
         IMongoDatabase database,
         IMaxEnrichmentService maxEnrichmentService,
-        IMaxTaskRepository maxTaskRepository)
+        IMaxTaskRepository maxTaskRepository,
+        IUserLookupService userLookupService)
     {
         _logger = logger;
         _ticketRepository = ticketRepository;
@@ -75,6 +77,7 @@ public class TicketsController : BaseController
         _database = database;
         _maxEnrichmentService = maxEnrichmentService;
         _maxTaskRepository = maxTaskRepository;
+        _userLookupService = userLookupService;
     }
 
     [HttpGet]
@@ -190,10 +193,17 @@ public class TicketsController : BaseController
                     linkedTickets.Add(linked);
             }
 
+            var messageResponses = _mapper.Map<List<TicketMessageResponse>>(messages);
+            if (messages.Any(m => m.Attachments?.Count > 0))
+            {
+                var project = await _projectRepository.GetAsync(ticket.ProjectId);
+                PopulateAttachmentUrls(messages, messageResponses, project?.Settings?.FileStorage);
+            }
+
             return Ok(new TicketDetailResponse
             {
                 Ticket = _mapper.Map<TicketResponse>(ticket),
-                Messages = _mapper.Map<List<TicketMessageResponse>>(messages),
+                Messages = messageResponses,
                 LinkedTickets = _mapper.Map<List<TicketResponse>>(linkedTickets)
             });
         }
@@ -276,6 +286,9 @@ public class TicketsController : BaseController
 
             _logger.LogInformation("Ticket created: {TicketId} in project {ProjectId}", created.Id, created.ProjectId);
             await _auditService.LogAsync(companyId, request.ProjectId, "Created", "Ticket", created.Id, _appUser, $"Subject: {subject}");
+
+            // Resolve the customer's external user id (fire-and-forget; service never throws)
+            _ = Task.Run(() => _userLookupService.LookupAndStoreAsync(project, request.CustomerEmail));
 
             // Fire alerts asynchronously (don't block the response)
             _ = Task.Run(async () =>
@@ -478,19 +491,41 @@ public class TicketsController : BaseController
     }
 
     private const long MaxAttachmentSize = 10 * 1024 * 1024; // 10MB
+    private const long MaxVideoAttachmentSize = 100 * 1024 * 1024; // 100MB
+    private static readonly TimeSpan AttachmentUrlLifetime = TimeSpan.FromHours(1);
+    private static readonly HashSet<string> AllowedAttachmentContentTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/svg+xml",
+        // Only formats browsers can actually play back in a <video> tag.
+        "video/mp4", "video/quicktime", "video/webm", "video/x-m4v",
+        "audio/mpeg", "audio/wav", "audio/ogg", "audio/mp4",
+        "text/plain", "text/csv", "text/markdown", "text/xml", "application/json", "application/xml",
+        "application/pdf", "application/zip", "application/x-zip-compressed",
+        "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        // Browsers report unknown-but-common files (.log, .env, ...) as octet-stream.
+        "application/octet-stream",
+    };
+
+    private static bool IsVideoContentType(string? contentType) =>
+        contentType != null && contentType.StartsWith("video/", StringComparison.OrdinalIgnoreCase);
 
     [HttpPost("{id}/messages/{messageId}/attachments")]
     [MapToApiVersion("1.0")]
     [ProducesResponseType(typeof(TicketMessageResponse), StatusCodes.Status200OK)]
-    [RequestSizeLimit(MaxAttachmentSize + 1024)] // allow overhead for multipart headers
+    [RequestSizeLimit(MaxVideoAttachmentSize + 1024)] // allow overhead for multipart headers
+    [RequestFormLimits(MultipartBodyLengthLimit = MaxVideoAttachmentSize + 1024)]
     public async Task<IActionResult> UploadAttachment(string companyId, string id, string messageId, IFormFile file)
     {
         try
         {
             if (file == null || file.Length == 0)
                 return BadRequest(new BadRequestResponse { Message = "No file provided" });
-            if (file.Length > MaxAttachmentSize)
-                return BadRequest(new BadRequestResponse { Message = "File exceeds 10MB limit" });
+            if (!AllowedAttachmentContentTypes.Contains(file.ContentType))
+                return BadRequest(new BadRequestResponse { Message = "Unsupported file type" });
+            var maxSize = IsVideoContentType(file.ContentType) ? MaxVideoAttachmentSize : MaxAttachmentSize;
+            if (file.Length > maxSize)
+                return BadRequest(new BadRequestResponse { Message = $"File exceeds {maxSize / (1024 * 1024)}MB limit" });
 
             var ticket = await _ticketRepository.GetAsync(id);
             if (ticket == null || ticket.CompanyId != companyId) return NotFound();
@@ -507,7 +542,7 @@ public class TicketsController : BaseController
             var message = messages.FirstOrDefault(m => m.Id == messageId);
             if (message == null) return NotFound();
 
-            var storageKey = $"{companyId}/{ticket.ProjectId}/ticket-attachments/{id}/{messageId}/{MongoDB.Bson.ObjectId.GenerateNewId()}_{file.FileName}";
+            var storageKey = $"{companyId}/{ticket.ProjectId}/ticket-attachments/{id}/{messageId}/{MongoDB.Bson.ObjectId.GenerateNewId()}_{SanitizeFileName(file.FileName)}";
 
             using var stream = file.OpenReadStream();
             await _fileStorageService.UploadAsync(project.Settings.FileStorage, storageKey, stream, file.ContentType);
@@ -525,7 +560,9 @@ public class TicketsController : BaseController
             await _ticketMessageRepository.UpdateAsync(message);
 
             _logger.LogInformation("Attachment {FileName} uploaded to message {MessageId}", file.FileName, messageId);
-            return Ok(_mapper.Map<TicketMessageResponse>(message));
+            var response = _mapper.Map<TicketMessageResponse>(message);
+            PopulateAttachmentUrls(new List<TicketMessage> { message }, new List<TicketMessageResponse> { response }, project.Settings.FileStorage);
+            return Ok(response);
         }
         catch (Exception ex)
         {
@@ -591,6 +628,39 @@ public class TicketsController : BaseController
             _logger.LogError(ex, "Error downloading attachment {AttachmentId}", attachmentId);
             return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
         }
+    }
+
+    /// Stamps a fresh presigned URL onto each attachment in the responses so the SPA can
+    /// render images/videos inline directly from S3. Skips silently when storage isn't configured.
+    private void PopulateAttachmentUrls(List<TicketMessage> messages, List<TicketMessageResponse> responses, FileStorageSettings? settings)
+    {
+        if (settings == null || string.IsNullOrEmpty(settings.BucketName)) return;
+
+        var storageKeysById = messages
+            .Where(m => m.Attachments != null)
+            .SelectMany(m => m.Attachments!)
+            .ToDictionary(a => a.Id, a => a.StorageKey);
+
+        foreach (var att in responses.Where(r => r.Attachments != null).SelectMany(r => r.Attachments!))
+        {
+            if (!storageKeysById.TryGetValue(att.Id, out var storageKey)) continue;
+            try
+            {
+                att.Url = _fileStorageService.GeneratePresignedUrl(settings, storageKey, AttachmentUrlLifetime);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to generate presigned URL for ticket attachment {StorageKey}", storageKey);
+            }
+        }
+    }
+
+    private static string SanitizeFileName(string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName)) return "file";
+        var name = System.IO.Path.GetFileName(fileName);
+        var clean = new string(name.Select(c => char.IsLetterOrDigit(c) || c == '.' || c == '-' || c == '_' ? c : '_').ToArray());
+        return string.IsNullOrWhiteSpace(clean) ? "file" : clean;
     }
 
     [HttpPost("{id}/link")]

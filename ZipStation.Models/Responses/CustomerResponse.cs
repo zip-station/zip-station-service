@@ -11,6 +11,7 @@ public class CustomerResponse
     public string? Notes { get; set; }
     public bool IsBanned { get; set; }
     public Dictionary<string, string> Properties { get; set; } = new();
+    public string? ExternalUserId { get; set; }
     public int OpenTicketCount { get; set; }
     public int ClosedTicketCount { get; set; }
     public int TotalTicketCount { get; set; }

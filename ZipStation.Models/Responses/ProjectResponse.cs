@@ -32,6 +32,16 @@ public class ProjectSettingsResponse
     public FileStorageSettingsResponse? FileStorage { get; set; }
     public MaxSettingsResponse? Max { get; set; }
     public DiscordSettingsResponse? Discord { get; set; }
+    public UserLookupSettingsResponse? UserLookup { get; set; }
+}
+
+public class UserLookupSettingsResponse
+{
+    public bool Enabled { get; set; }
+    public string Url { get; set; } = string.Empty;
+    public string UserIdField { get; set; } = string.Empty;
+    public string? AuthHeaderName { get; set; }
+    public bool HasAuthHeaderValue { get; set; }
 }
 
 public class DiscordSettingsResponse

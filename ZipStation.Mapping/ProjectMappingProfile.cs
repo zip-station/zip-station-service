@@ -26,5 +26,7 @@ public class ProjectMappingProfile : Profile
         CreateMap<DiscordSettings, DiscordSettingsResponse>()
             .ForMember(d => d.BotTokenSet, o => o.MapFrom(s => !string.IsNullOrEmpty(s.BotTokenEncrypted)));
         CreateMap<DiscordSource, DiscordSourceResponse>();
+        CreateMap<UserLookupSettings, UserLookupSettingsResponse>()
+            .ForMember(d => d.HasAuthHeaderValue, o => o.MapFrom(s => !string.IsNullOrEmpty(s.AuthHeaderValue)));
     }
 }
