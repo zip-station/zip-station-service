@@ -18,7 +18,7 @@ public static class AttachmentPolicy
     public const long MaxVideoSize = 100 * 1024 * 1024; // 100 MB
 
     /// <summary>Cap for everything else.</summary>
-    public const long MaxFileSize = 10 * 1024 * 1024; // 10 MB
+    public const long MaxFileSize = 20 * 1024 * 1024; // 20 MB
 
     /// <summary>
     /// Largest body any attachment endpoint accepts. Drives the <c>[RequestSizeLimit]</c>
