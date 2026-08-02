@@ -22,18 +22,8 @@ public class KanbanBoardController : BaseController
 {
     private const int MaxColumns = 8;
     private const double PositionStep = 1000d;
-    private const long MaxImageSize = 5 * 1024 * 1024; // 5 MB
+    // What may be uploaded and how big it can be lives in AttachmentPolicy, shared with TicketsController.
     private static readonly TimeSpan ImageUrlLifetime = TimeSpan.FromHours(1);
-    private static readonly HashSet<string> AllowedImageContentTypes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp",
-    };
-    private const long MaxVideoSize = 100 * 1024 * 1024; // 100 MB
-    // Only formats browsers can actually play back in a <video> tag.
-    private static readonly HashSet<string> AllowedVideoContentTypes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "video/mp4", "video/quicktime", "video/webm", "video/x-m4v",
-    };
     private static readonly Regex ImgTagPattern = new(@"<img\b[^>]*?>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex DataKeyAttrPattern = new(@"data-zs-key=""([^""]+)""", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex SrcAttrPattern = new(@"\bsrc=""[^""]*""", RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -425,7 +415,7 @@ public class KanbanBoardController : BaseController
 
     [HttpPost("images")]
     [MapToApiVersion("1.0")]
-    [RequestSizeLimit(MaxImageSize + 1024)]
+    [RequestSizeLimit(AttachmentPolicy.MaxInlineImageSize + 1024)]
     [ProducesResponseType(typeof(KanbanImageUploadResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(BadRequestResponse), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> UploadImage(string companyId, string projectId, IFormFile file)
@@ -437,9 +427,9 @@ public class KanbanBoardController : BaseController
 
             if (file == null || file.Length == 0)
                 return BadRequest(new BadRequestResponse { Message = "No file provided" });
-            if (file.Length > MaxImageSize)
+            if (file.Length > AttachmentPolicy.MaxInlineImageSize)
                 return BadRequest(new BadRequestResponse { Message = "Image exceeds 5MB limit" });
-            if (!AllowedImageContentTypes.Contains(file.ContentType))
+            if (!AttachmentPolicy.IsAllowedInlineImage(file.ContentType))
                 return BadRequest(new BadRequestResponse { Message = "Unsupported image type. Use PNG, JPEG, GIF, or WebP." });
 
             var project = await _projectRepository.GetAsync(projectId);
@@ -463,12 +453,12 @@ public class KanbanBoardController : BaseController
         }
     }
 
-    // ----- Attachments (video files pinned to a story) -----
+    // ----- Attachments (files pinned to a story) -----
 
     [HttpPost("cards/{id}/attachments")]
     [MapToApiVersion("1.0")]
-    [RequestSizeLimit(MaxVideoSize + 1024)]
-    [RequestFormLimits(MultipartBodyLengthLimit = MaxVideoSize + 1024)]
+    [RequestSizeLimit(AttachmentPolicy.MaxRequestSize + 1024)]
+    [RequestFormLimits(MultipartBodyLengthLimit = AttachmentPolicy.MaxRequestSize + 1024)]
     [ProducesResponseType(typeof(MessageAttachmentResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(BadRequestResponse), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> UploadCardAttachment(string companyId, string projectId, string id, IFormFile file)
@@ -483,10 +473,10 @@ public class KanbanBoardController : BaseController
 
             if (file == null || file.Length == 0)
                 return BadRequest(new BadRequestResponse { Message = "No file provided" });
-            if (file.Length > MaxVideoSize)
-                return BadRequest(new BadRequestResponse { Message = "Video exceeds 100MB limit" });
-            if (!AllowedVideoContentTypes.Contains(file.ContentType))
-                return BadRequest(new BadRequestResponse { Message = "Unsupported video type. Use MP4, MOV, WebM, or M4V." });
+            if (!AttachmentPolicy.IsAllowed(file.ContentType))
+                return BadRequest(new BadRequestResponse { Message = AttachmentPolicy.UnsupportedTypeMessage });
+            if (file.Length > AttachmentPolicy.MaxSizeFor(file.ContentType))
+                return BadRequest(new BadRequestResponse { Message = AttachmentPolicy.SizeLimitMessage(file.ContentType) });
 
             var project = await _projectRepository.GetAsync(projectId);
             if (project == null || project.CompanyId != companyId) return NotFound();
@@ -512,7 +502,8 @@ public class KanbanBoardController : BaseController
             await _auditService.LogAsync(companyId, projectId, "AttachmentAdded", "KanbanCard", card.Id, _appUser, $"STR-{card.CardNumber}: {file.FileName}");
 
             var response = _mapper.Map<MessageAttachmentResponse>(attachment);
-            response.Url = _fileStorageService.GeneratePresignedUrl(project.Settings.FileStorage, storageKey, ImageUrlLifetime);
+            response.Url = _fileStorageService.GeneratePresignedUrl(
+                project.Settings.FileStorage, storageKey, ImageUrlLifetime, PresignedOptionsFor(attachment));
             return Ok(response);
         }
         catch (Exception ex)
@@ -562,6 +553,46 @@ public class KanbanBoardController : BaseController
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error deleting attachment {AttachmentId} from kanban card {CardId}", attachmentId, id);
+            return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
+        }
+    }
+
+    /// <summary>
+    /// Streams an attachment back through the API rather than handing out the presigned URL.
+    /// Needed for documents: the presigned link carries no Content-Disposition, so a .json or
+    /// .txt would render raw in a tab under its storage key instead of saving under its real
+    /// name. Mirrors TicketsController.DownloadAttachment.
+    /// </summary>
+    [HttpGet("cards/{id}/attachments/{attachmentId}")]
+    [MapToApiVersion("1.0")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DownloadCardAttachment(string companyId, string projectId, string id, string attachmentId)
+    {
+        try
+        {
+            var gw = await _gateway.CanViewAsync(companyId, projectId);
+            if (gw.ResponseStatus != GatewayResponseCodes.Ok) return ProcessGatewayResponse(gw);
+
+            var card = await _cardRepository.GetAsync(id);
+            if (card == null || card.CompanyId != companyId || card.ProjectId != projectId) return NotFound();
+
+            var attachment = card.Attachments?.FirstOrDefault(a => a.Id == attachmentId);
+            if (attachment == null) return NotFound();
+
+            var project = await _projectRepository.GetAsync(projectId);
+            if (project?.Settings?.FileStorage == null || string.IsNullOrEmpty(project.Settings.FileStorage.BucketName))
+                return BadRequest(new BadRequestResponse { Message = "File storage not configured for this project" });
+
+            var stream = await _fileStorageService.DownloadAsync(project.Settings.FileStorage, attachment.StorageKey);
+
+            // Stop the browser from re-sniffing a mislabelled body into something executable.
+            Response.Headers["X-Content-Type-Options"] = "nosniff";
+            return File(stream, attachment.ContentType, attachment.FileName);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error downloading attachment {AttachmentId} from kanban card {CardId}", attachmentId, id);
             return StatusCode(500, new BadRequestResponse { Message = "An unexpected error occurred" });
         }
     }
@@ -1093,20 +1124,28 @@ public class KanbanBoardController : BaseController
         return byId;
     }
 
-    /// Stamps a fresh presigned URL onto each attachment in the response so the SPA can
-    /// stream the video directly from S3. Skips silently when storage isn't configured.
+    /// Options for an attachment's presigned URL — pins Content-Disposition on types a browser
+    /// would execute if navigated to directly, so the link downloads instead of rendering.
+    private static PresignedUrlOptions? PresignedOptionsFor(MessageAttachment attachment) =>
+        AttachmentPolicy.RequiresForcedDownload(attachment.ContentType)
+            ? new PresignedUrlOptions { ForceDownload = true, FileName = attachment.FileName }
+            : null;
+
+    /// Stamps a fresh presigned URL onto each attachment in the response so the SPA can preview
+    /// media directly from S3. Skips silently when storage isn't configured.
     private void PopulateAttachmentUrls(KanbanCard card, KanbanCardResponse response, FileStorageSettings? settings)
     {
         if (card.Attachments == null || response.Attachments == null || settings == null || string.IsNullOrEmpty(settings.BucketName))
             return;
 
-        var storageKeysById = card.Attachments.ToDictionary(a => a.Id, a => a.StorageKey);
+        var attachmentsById = card.Attachments.ToDictionary(a => a.Id);
         foreach (var att in response.Attachments)
         {
-            if (!storageKeysById.TryGetValue(att.Id, out var storageKey)) continue;
+            if (!attachmentsById.TryGetValue(att.Id, out var source)) continue;
+            var storageKey = source.StorageKey;
             try
             {
-                att.Url = _fileStorageService.GeneratePresignedUrl(settings, storageKey, ImageUrlLifetime);
+                att.Url = _fileStorageService.GeneratePresignedUrl(settings, storageKey, ImageUrlLifetime, PresignedOptionsFor(source));
             }
             catch (Exception ex)
             {

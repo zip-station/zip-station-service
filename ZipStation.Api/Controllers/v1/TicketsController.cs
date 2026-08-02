@@ -490,42 +490,24 @@ public class TicketsController : BaseController
         }
     }
 
-    private const long MaxAttachmentSize = 10 * 1024 * 1024; // 10MB
-    private const long MaxVideoAttachmentSize = 100 * 1024 * 1024; // 100MB
+    // What may be uploaded and how big it can be lives in AttachmentPolicy, shared with KanbanBoardController.
     private static readonly TimeSpan AttachmentUrlLifetime = TimeSpan.FromHours(1);
-    private static readonly HashSet<string> AllowedAttachmentContentTypes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/svg+xml",
-        // Only formats browsers can actually play back in a <video> tag.
-        "video/mp4", "video/quicktime", "video/webm", "video/x-m4v",
-        "audio/mpeg", "audio/wav", "audio/ogg", "audio/mp4",
-        "text/plain", "text/csv", "text/markdown", "text/xml", "application/json", "application/xml",
-        "application/pdf", "application/zip", "application/x-zip-compressed",
-        "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        // Browsers report unknown-but-common files (.log, .env, ...) as octet-stream.
-        "application/octet-stream",
-    };
-
-    private static bool IsVideoContentType(string? contentType) =>
-        contentType != null && contentType.StartsWith("video/", StringComparison.OrdinalIgnoreCase);
 
     [HttpPost("{id}/messages/{messageId}/attachments")]
     [MapToApiVersion("1.0")]
     [ProducesResponseType(typeof(TicketMessageResponse), StatusCodes.Status200OK)]
-    [RequestSizeLimit(MaxVideoAttachmentSize + 1024)] // allow overhead for multipart headers
-    [RequestFormLimits(MultipartBodyLengthLimit = MaxVideoAttachmentSize + 1024)]
+    [RequestSizeLimit(AttachmentPolicy.MaxRequestSize + 1024)] // allow overhead for multipart headers
+    [RequestFormLimits(MultipartBodyLengthLimit = AttachmentPolicy.MaxRequestSize + 1024)]
     public async Task<IActionResult> UploadAttachment(string companyId, string id, string messageId, IFormFile file)
     {
         try
         {
             if (file == null || file.Length == 0)
                 return BadRequest(new BadRequestResponse { Message = "No file provided" });
-            if (!AllowedAttachmentContentTypes.Contains(file.ContentType))
-                return BadRequest(new BadRequestResponse { Message = "Unsupported file type" });
-            var maxSize = IsVideoContentType(file.ContentType) ? MaxVideoAttachmentSize : MaxAttachmentSize;
-            if (file.Length > maxSize)
-                return BadRequest(new BadRequestResponse { Message = $"File exceeds {maxSize / (1024 * 1024)}MB limit" });
+            if (!AttachmentPolicy.IsAllowed(file.ContentType))
+                return BadRequest(new BadRequestResponse { Message = AttachmentPolicy.UnsupportedTypeMessage });
+            if (file.Length > AttachmentPolicy.MaxSizeFor(file.ContentType))
+                return BadRequest(new BadRequestResponse { Message = AttachmentPolicy.SizeLimitMessage(file.ContentType) });
 
             var ticket = await _ticketRepository.GetAsync(id);
             if (ticket == null || ticket.CompanyId != companyId) return NotFound();
@@ -621,6 +603,9 @@ public class TicketsController : BaseController
             if (attachment == null) return NotFound();
 
             var stream = await _fileStorageService.DownloadAsync(project.Settings.FileStorage, attachment.StorageKey);
+
+            // Stop the browser from re-sniffing a mislabelled body into something executable.
+            Response.Headers["X-Content-Type-Options"] = "nosniff";
             return File(stream, attachment.ContentType, attachment.FileName);
         }
         catch (Exception ex)
@@ -636,17 +621,22 @@ public class TicketsController : BaseController
     {
         if (settings == null || string.IsNullOrEmpty(settings.BucketName)) return;
 
-        var storageKeysById = messages
+        var attachmentsById = messages
             .Where(m => m.Attachments != null)
             .SelectMany(m => m.Attachments!)
-            .ToDictionary(a => a.Id, a => a.StorageKey);
+            .ToDictionary(a => a.Id);
 
         foreach (var att in responses.Where(r => r.Attachments != null).SelectMany(r => r.Attachments!))
         {
-            if (!storageKeysById.TryGetValue(att.Id, out var storageKey)) continue;
+            if (!attachmentsById.TryGetValue(att.Id, out var source)) continue;
+            var storageKey = source.StorageKey;
             try
             {
-                att.Url = _fileStorageService.GeneratePresignedUrl(settings, storageKey, AttachmentUrlLifetime);
+                // Pin Content-Disposition on types a browser would execute if navigated to directly.
+                var options = AttachmentPolicy.RequiresForcedDownload(source.ContentType)
+                    ? new PresignedUrlOptions { ForceDownload = true, FileName = source.FileName }
+                    : null;
+                att.Url = _fileStorageService.GeneratePresignedUrl(settings, storageKey, AttachmentUrlLifetime, options);
             }
             catch (Exception ex)
             {
