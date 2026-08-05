@@ -372,6 +372,15 @@ public class KanbanBoardController : BaseController
             var linkedTickets = await LoadLinkedTicketsAsync(card.LinkedTicketIds, companyId);
             var linkedStories = await LoadLinkedStoriesAsync(card.LinkedStoryIds, companyId);
 
+            // Story links are stored one-way on whichever card initiated them; merge in
+            // cards that point at this one so the relationship reads as bidirectional.
+            foreach (var other in await _cardRepository.GetByLinkedStoryIdAsync(card.Id))
+            {
+                if (other.CompanyId != companyId || other.Id == card.Id) continue;
+                if (linkedStories.Any(s => s.Id == other.Id)) continue;
+                linkedStories.Add(other);
+            }
+
             var project = await _projectRepository.GetAsync(projectId);
             var fileStorage = project?.Settings?.FileStorage;
             var board = await _boardRepository.GetByProjectIdAsync(projectId);
@@ -895,6 +904,12 @@ public class KanbanBoardController : BaseController
 
             if (card.LinkedStoryIds.Remove(otherCardId))
                 await _cardRepository.UpdateAsync(card);
+
+            // The link may be stored on the other card (links are one-way in the data,
+            // surfaced bidirectionally on read) — clear that direction too.
+            var other = await _cardRepository.GetAsync(otherCardId);
+            if (other != null && other.CompanyId == companyId && other.LinkedStoryIds.Remove(card.Id))
+                await _cardRepository.UpdateAsync(other);
 
             return Ok(_mapper.Map<KanbanCardResponse>(card));
         }
