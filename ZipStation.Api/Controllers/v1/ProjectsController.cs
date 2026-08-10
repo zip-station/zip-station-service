@@ -478,6 +478,42 @@ public class ProjectsController : BaseController
         return Ok(new { success, message });
     }
 
+    [HttpPost("{id}/test-user-lookup")]
+    [MapToApiVersion("1.0")]
+    public async Task<IActionResult> TestUserLookup(string companyId, string id, [FromBody] TestUserLookupRequest request,
+        [FromServices] IUserLookupService userLookupService)
+    {
+        var gatewayResponse = await _projectGateway.CanUpdateProjectAsync(companyId, id);
+        if (gatewayResponse.ResponseStatus != GatewayResponseCodes.Ok)
+            return ProcessGatewayResponse(gatewayResponse);
+
+        var project = await _projectRepository.GetAsync(id);
+        if (project == null || project.CompanyId != companyId) return NotFound();
+
+        if (string.IsNullOrWhiteSpace(request.Email))
+            return BadRequest(new BadRequestResponse { Message = "Provide a sample email to look up" });
+
+        var saved = project.Settings.UserLookup;
+        // Unsent fields fall back to the saved settings; a typed auth value is used as-is
+        // (encrypted in transit here so the service's decrypt-at-use contract holds).
+        var settings = new UserLookupSettings
+        {
+            Enabled = true,
+            Url = !string.IsNullOrWhiteSpace(request.Url) ? request.Url : saved?.Url ?? "",
+            UserIdField = !string.IsNullOrWhiteSpace(request.UserIdField) ? request.UserIdField : saved?.UserIdField ?? "",
+            AuthHeaderName = !string.IsNullOrWhiteSpace(request.AuthHeaderName) ? request.AuthHeaderName : saved?.AuthHeaderName,
+            AuthHeaderValue = !string.IsNullOrEmpty(request.AuthHeaderValue)
+                ? EncryptionHelper.Encrypt(request.AuthHeaderValue)
+                : saved?.AuthHeaderValue
+        };
+
+        if (string.IsNullOrWhiteSpace(settings.Url) || string.IsNullOrWhiteSpace(settings.UserIdField))
+            return BadRequest(new BadRequestResponse { Message = "Lookup URL and User ID Field are required" });
+
+        var result = await userLookupService.TestLookupAsync(settings, request.Email.Trim());
+        return Ok(result);
+    }
+
     [HttpGet("{id}/members")]
     [MapToApiVersion("1.0")]
     [ProducesResponseType(typeof(List<ProjectMemberResponse>), StatusCodes.Status200OK)]
@@ -722,6 +758,16 @@ public class UpdateFileStorageSettingsRequest
     public string BucketName { get; set; } = string.Empty;
     public string Endpoint { get; set; } = string.Empty;
     public string Region { get; set; } = string.Empty;
+}
+
+public class TestUserLookupRequest
+{
+    public string Email { get; set; } = string.Empty;
+    /// Optional overrides for testing unsaved form values; empty = use saved settings.
+    public string? Url { get; set; }
+    public string? UserIdField { get; set; }
+    public string? AuthHeaderName { get; set; }
+    public string? AuthHeaderValue { get; set; }
 }
 
 public class TestConnectionRequest

@@ -13,6 +13,19 @@ public interface IUserLookupService
     /// the customer is unknown, or the customer already has an ExternalUserId.
     /// Never throws — lookup failures are logged and swallowed.
     Task LookupAndStoreAsync(Project project, string? customerEmail);
+
+    /// Runs the configured lookup for a sample email and reports what happened,
+    /// without touching any customer record. AuthHeaderValue on settings is encrypted.
+    Task<UserLookupTestResult> TestLookupAsync(UserLookupSettings settings, string email);
+}
+
+public class UserLookupTestResult
+{
+    public bool Success { get; set; }
+    public string? ExtractedUserId { get; set; }
+    public string? Error { get; set; }
+    /// The URL that was called, so a misconfigured template is visible at a glance.
+    public string? RequestedUrl { get; set; }
 }
 
 public class UserLookupService : IUserLookupService
@@ -53,6 +66,54 @@ public class UserLookupService : IUserLookupService
             _logger.LogWarning(ex, "User lookup failed for project {ProjectId}", project.Id);
         }
     }
+
+    public async Task<UserLookupTestResult> TestLookupAsync(UserLookupSettings settings, string email)
+    {
+        var result = new UserLookupTestResult { RequestedUrl = BuildUrl(settings.Url, email) };
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, result.RequestedUrl);
+            if (!string.IsNullOrEmpty(settings.AuthHeaderName) && !string.IsNullOrEmpty(settings.AuthHeaderValue))
+                request.Headers.TryAddWithoutValidation(settings.AuthHeaderName, EncryptionHelper.Decrypt(settings.AuthHeaderValue));
+
+            using var response = await _httpClient.SendAsync(request);
+            var json = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+            {
+                result.Error = $"Endpoint returned HTTP {(int)response.StatusCode}: {Truncate(json, 300)}";
+                return result;
+            }
+
+            string? extracted;
+            try
+            {
+                extracted = ExtractField(json, settings.UserIdField);
+            }
+            catch (JsonException)
+            {
+                result.Error = $"Response is not valid JSON: {Truncate(json, 300)}";
+                return result;
+            }
+
+            if (string.IsNullOrEmpty(extracted))
+            {
+                result.Error = $"No value found at path \"{settings.UserIdField}\". Response: {Truncate(json, 300)}";
+                return result;
+            }
+
+            result.Success = true;
+            result.ExtractedUserId = extracted;
+            return result;
+        }
+        catch (Exception ex)
+        {
+            result.Error = ex.Message;
+            return result;
+        }
+    }
+
+    private static string Truncate(string value, int max) =>
+        value.Length <= max ? value : value[..max] + "…";
 
     private static async Task<string?> CallLookupEndpointAsync(UserLookupSettings settings, string email)
     {
