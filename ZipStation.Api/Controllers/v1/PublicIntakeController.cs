@@ -82,6 +82,10 @@ public class PublicIntakeController : BaseController
         if (string.IsNullOrWhiteSpace(request.Message))
             return BadRequest(new { message = "Message is required" });
 
+        // A client-supplied external user id is authoritative — it is stored as-is and
+        // the configured UserLookup endpoint is never called for this request.
+        var externalUserId = string.IsNullOrWhiteSpace(request.ExternalUserId) ? null : request.ExternalUserId.Trim();
+
         // Get or create customer
         var customer = await _customerRepository.GetByEmailAndProjectAsync(request.Email, project.Id);
         if (customer == null)
@@ -91,9 +95,15 @@ public class PublicIntakeController : BaseController
                 CompanyId = project.CompanyId,
                 ProjectId = project.Id,
                 Email = request.Email,
-                Name = request.Name ?? request.Email.Split('@')[0]
+                Name = request.Name ?? request.Email.Split('@')[0],
+                ExternalUserId = externalUserId
             };
             await _customerRepository.CreateAsync(customer);
+        }
+        else if (externalUserId != null && customer.ExternalUserId != externalUserId)
+        {
+            customer.ExternalUserId = externalUserId;
+            await _customerRepository.UpdateAsync(customer);
         }
 
         // Check for existing open ticket from this customer (thread onto it)
@@ -114,6 +124,14 @@ public class PublicIntakeController : BaseController
                 Source = MessageSource.Customer
             };
             await _ticketMessageRepository.CreateAsync(message);
+
+            // Merge any client-supplied tags onto the existing ticket
+            var newTags = request.Tags?.Where(t => !string.IsNullOrWhiteSpace(t) && !existingTicket.Tags.Contains(t)).ToList();
+            if (newTags is { Count: > 0 })
+            {
+                existingTicket.Tags.AddRange(newTags);
+                await _ticketRepository.UpdateAsync(existingTicket);
+            }
 
             _logger.LogInformation("Public API: threaded message onto ticket {TicketId} from {Email}", existingTicket.Id, request.Email);
 
@@ -179,8 +197,10 @@ public class PublicIntakeController : BaseController
 
         _logger.LogInformation("Public API: created ticket {TicketId} from {Email}", created.Id, request.Email);
 
-        // Resolve the customer's external user id (fire-and-forget; service never throws)
-        _ = Task.Run(() => _userLookupService.LookupAndStoreAsync(project, request.Email));
+        // Resolve the customer's external user id (fire-and-forget; service never throws).
+        // Skipped when the client supplied one — no need to call the lookup endpoint.
+        if (externalUserId == null)
+            _ = Task.Run(() => _userLookupService.LookupAndStoreAsync(project, request.Email));
 
         // Fire alerts + auto-reply in background
         _ = Task.Run(async () => {
@@ -218,6 +238,9 @@ public class PublicIntakeRequest
     public string? MessageHtml { get; set; }
     public List<string>? Tags { get; set; }
     public bool ForceNewTicket { get; set; }
+    /// The customer's id in the caller's own system. When provided it is stored on the
+    /// customer record directly and the project's UserLookup endpoint is not called.
+    public string? ExternalUserId { get; set; }
 }
 
 public class PublicIntakeResponse
