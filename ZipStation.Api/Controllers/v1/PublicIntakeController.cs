@@ -85,6 +85,7 @@ public class PublicIntakeController : BaseController
         // A client-supplied external user id is authoritative — it is stored as-is and
         // the configured UserLookup endpoint is never called for this request.
         var externalUserId = string.IsNullOrWhiteSpace(request.ExternalUserId) ? null : request.ExternalUserId.Trim();
+        var properties = SanitizeProperties(request.Properties);
 
         // Get or create customer
         var customer = await _customerRepository.GetByEmailAndProjectAsync(request.Email, project.Id);
@@ -96,14 +97,34 @@ public class PublicIntakeController : BaseController
                 ProjectId = project.Id,
                 Email = request.Email,
                 Name = request.Name ?? request.Email.Split('@')[0],
-                ExternalUserId = externalUserId
+                ExternalUserId = externalUserId,
+                Properties = properties ?? new Dictionary<string, string>()
             };
             await _customerRepository.CreateAsync(customer);
         }
-        else if (externalUserId != null && customer.ExternalUserId != externalUserId)
+        else
         {
-            customer.ExternalUserId = externalUserId;
-            await _customerRepository.UpdateAsync(customer);
+            var customerChanged = false;
+            if (externalUserId != null && customer.ExternalUserId != externalUserId)
+            {
+                customer.ExternalUserId = externalUserId;
+                customerChanged = true;
+            }
+
+            // Merge client-supplied properties; latest submission wins per key.
+            if (properties != null)
+            {
+                foreach (var (key, value) in properties)
+                {
+                    if (customer.Properties.TryGetValue(key, out var existing) && existing == value)
+                        continue;
+                    customer.Properties[key] = value;
+                    customerChanged = true;
+                }
+            }
+
+            if (customerChanged)
+                await _customerRepository.UpdateAsync(customer);
         }
 
         // Check for existing open ticket from this customer (thread onto it)
@@ -227,6 +248,17 @@ public class PublicIntakeController : BaseController
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(key));
         return Convert.ToBase64String(bytes);
     }
+
+    // Drops blank keys/values and keys Mongo can't store as field names ('.', '$').
+    private static Dictionary<string, string>? SanitizeProperties(Dictionary<string, string>? properties)
+    {
+        if (properties == null) return null;
+        var clean = properties
+            .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Key) && !string.IsNullOrWhiteSpace(kvp.Value)
+                && !kvp.Key.Contains('.') && !kvp.Key.StartsWith('$'))
+            .ToDictionary(kvp => kvp.Key.Trim(), kvp => kvp.Value.Trim());
+        return clean.Count > 0 ? clean : null;
+    }
 }
 
 public class PublicIntakeRequest
@@ -241,6 +273,8 @@ public class PublicIntakeRequest
     /// The customer's id in the caller's own system. When provided it is stored on the
     /// customer record directly and the project's UserLookup endpoint is not called.
     public string? ExternalUserId { get; set; }
+    /// Arbitrary key/value pairs merged onto the customer record (e.g. deviceId).
+    public Dictionary<string, string>? Properties { get; set; }
 }
 
 public class PublicIntakeResponse
