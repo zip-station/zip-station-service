@@ -108,21 +108,23 @@ public static class KanbanStatusRules
         }
     }
 
-    /// Keep status in sync when a board card is dragged between columns (no explicit status given).
-    /// Moving into the resolved column resolves it; moving back out re-commits it. Mutates the card.
+    /// Keep status in sync when a card is moved into a column without an explicit status (board drag,
+    /// MCP move_story, API PATCH with only columnId). A column implies an on-board status: the
+    /// resolved column means Resolved, any other column means Committed — regardless of whether the
+    /// card started on the board or came from the backlog / triage queue. Mutates the card.
     public static void SyncStatusForColumnMove(KanbanCard card, string previousColumnId, KanbanBoard board, long nowUnixMs)
     {
-        if (string.IsNullOrEmpty(board.ResolvedColumnId)) return;
+        if (string.IsNullOrEmpty(card.ColumnId) || card.ColumnId == previousColumnId) return;
 
-        var movedIntoResolved = previousColumnId != board.ResolvedColumnId && card.ColumnId == board.ResolvedColumnId;
-        var movedOutOfResolved = previousColumnId == board.ResolvedColumnId && card.ColumnId != board.ResolvedColumnId;
+        var intoResolved = !string.IsNullOrEmpty(board.ResolvedColumnId) && card.ColumnId == board.ResolvedColumnId;
 
-        if (movedIntoResolved)
+        if (intoResolved)
         {
+            if (card.Status == KanbanStoryStatus.Resolved) return;
             card.Status = KanbanStoryStatus.Resolved;
             card.ResolvedOnDateTime = nowUnixMs;
         }
-        else if (movedOutOfResolved)
+        else
         {
             card.Status = KanbanStoryStatus.Committed;
             card.ResolvedOnDateTime = 0;

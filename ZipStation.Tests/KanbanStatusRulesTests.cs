@@ -221,17 +221,81 @@ public class KanbanStatusRulesTests
     }
 
     [Fact]
-    public void SyncStatusForColumnMove_NoResolvedColumnConfigured_NoOp()
+    public void SyncStatusForColumnMove_NoResolvedColumnConfigured_Commits()
     {
         var board = new KanbanBoard
         {
             Columns = new List<KanbanColumn> { new() { Id = "a", Position = 0 } },
             ResolvedColumnId = string.Empty,
         };
-        var card = new KanbanCard { Status = KanbanStoryStatus.Committed, ColumnId = "a" };
+        var card = new KanbanCard { Status = KanbanStoryStatus.Backlog, ColumnId = "a" };
 
-        KanbanStatusRules.SyncStatusForColumnMove(card, previousColumnId: "b", board, Now);
+        KanbanStatusRules.SyncStatusForColumnMove(card, previousColumnId: "", board, Now);
 
         Assert.Equal(KanbanStoryStatus.Committed, card.Status);
+    }
+
+    [Theory]
+    [InlineData(KanbanStoryStatus.Backlog)]
+    [InlineData(KanbanStoryStatus.Unreviewed)]
+    public void SyncStatusForColumnMove_OffBoardIntoWorkflowColumn_Commits(KanbanStoryStatus from)
+    {
+        var board = BoardWith3Columns();
+        var card = new KanbanCard { Status = from, ColumnId = "doing" };
+
+        KanbanStatusRules.SyncStatusForColumnMove(card, previousColumnId: "", board, Now);
+
+        Assert.Equal(KanbanStoryStatus.Committed, card.Status);
+        Assert.Equal(0, card.ResolvedOnDateTime);
+    }
+
+    [Theory]
+    [InlineData(KanbanStoryStatus.Backlog)]
+    [InlineData(KanbanStoryStatus.Unreviewed)]
+    public void SyncStatusForColumnMove_OffBoardIntoResolved_Resolves(KanbanStoryStatus from)
+    {
+        var board = BoardWith3Columns();
+        var card = new KanbanCard { Status = from, ColumnId = "done" };
+
+        KanbanStatusRules.SyncStatusForColumnMove(card, previousColumnId: "", board, Now);
+
+        Assert.Equal(KanbanStoryStatus.Resolved, card.Status);
+        Assert.Equal(Now, card.ResolvedOnDateTime);
+    }
+
+    [Fact]
+    public void SyncStatusForColumnMove_StaleOffBoardCardInWorkflowColumn_MovedToAnotherColumn_Commits()
+    {
+        // The reported bug's leftover state: a Backlog card already sitting in a workflow column.
+        var board = BoardWith3Columns();
+        var card = new KanbanCard { Status = KanbanStoryStatus.Backlog, ColumnId = "doing" };
+
+        KanbanStatusRules.SyncStatusForColumnMove(card, previousColumnId: "todo", board, Now);
+
+        Assert.Equal(KanbanStoryStatus.Committed, card.Status);
+    }
+
+    [Fact]
+    public void SyncStatusForColumnMove_SameColumnReorder_LeavesStatus()
+    {
+        var board = BoardWith3Columns();
+        var card = new KanbanCard { Status = KanbanStoryStatus.Resolved, ColumnId = "done", ResolvedOnDateTime = 999 };
+
+        KanbanStatusRules.SyncStatusForColumnMove(card, previousColumnId: "done", board, Now);
+
+        Assert.Equal(KanbanStoryStatus.Resolved, card.Status);
+        Assert.Equal(999, card.ResolvedOnDateTime);
+    }
+
+    [Fact]
+    public void SyncStatusForColumnMove_NoColumn_LeavesStatus()
+    {
+        // A PATCH that touches only title etc. on an off-board card must not commit it.
+        var board = BoardWith3Columns();
+        var card = new KanbanCard { Status = KanbanStoryStatus.Backlog, ColumnId = "" };
+
+        KanbanStatusRules.SyncStatusForColumnMove(card, previousColumnId: "", board, Now);
+
+        Assert.Equal(KanbanStoryStatus.Backlog, card.Status);
     }
 }
